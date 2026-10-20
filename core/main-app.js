@@ -4,6 +4,7 @@ const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage,
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
+const crypto = require("crypto");
 const attachMainInjector = require("./main-injector");
 const node_update_host_ = require("./node-update-host");
 const { createNodeUpdateHost, requestBuffer } = node_update_host_;
@@ -20,7 +21,7 @@ const { createPluginStore } = plugin_store_;
 const components_ = require("./components");
 const { COMPONENTS, parseUserScriptHeader } = components_;
 const entries_ = require("./entries");
-const { ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, TEST_ORIGIN } = entries_;
+const { ENTRIES, PROVIDERS, entryById, providerById, providerByLabel, matchesAnyEntry, TEST_ORIGIN } = entries_;
 const game_shell_ = require("./game-shell");
 const { TITLE_HEIGHT, FRAME, BAR_COLOR, frameDocument, chromeDocument, viewportBounds } = game_shell_;
 const UpdateCore = require("./update-core");
@@ -28,6 +29,7 @@ const popup_window_ = require("./popup-window");
 const { createOverlays } = popup_window_;
 const configuredSessions = /* @__PURE__ */ new WeakSet();
 const windows = /* @__PURE__ */ new Map();
+const authWindowOwners = /* @__PURE__ */ new Map();
 const occupiedSlots = /* @__PURE__ */ new Set();
 let nextSlot = 1;
 const crashHistory = /* @__PURE__ */ new WeakMap();
@@ -39,7 +41,21 @@ let shellUpdateHost = null;
 let credentials = null;
 let pluginStore = null;
 const OFFICIAL_LOGIN_PATHS = ["/login/index.html", "/login/x/index"];
-const PROVIDER_CHIP = { qq: "WeGame", wx: "WeGame", bilibili: "哔哩哔哩", steam: "Steam", oppo: "OPPO", xiaomi: "小米", vivo: "VIVO", huawei: "华为", honor: "荣耀" };
+const PROVIDER_CHIP = {
+  qq: "WeGame",
+  wx: "WeGame",
+  bilibili: "哔哩哔哩",
+  steam: "Steam",
+  oppo: "OPPO",
+  xiaomi: "小米",
+  vivo: "VIVO",
+  huawei: "华为",
+  honor: "荣耀",
+  "steam-web": "Steam",
+  "oppo-web": "OPPO",
+  "xiaomi-web": "小米",
+  "vivo-web": "VIVO"
+};
 const UI_DEFAULTS = Object.freeze({ restore: true, confirmClose: true, muteNew: false, manager: true, stats: true });
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (character) => ({
@@ -282,6 +298,8 @@ module.exports = function startMicroClient(config) {
     return null;
   }
   function tabOf(sender) {
+    const authTab = authWindowOwners.get(sender);
+    if (authTab && !authTab.contents.isDestroyed()) return { record: authTab.owner, tab: authTab };
     for (const [, record] of windows) for (const [, tab] of record.tabs) if (tab.contents === sender) return { record, tab };
     return null;
   }
@@ -379,9 +397,32 @@ module.exports = function startMicroClient(config) {
       }
     });
     const contents = view.webContents;
-    const providerId = known ? known.provider : msg.provider ? PROVIDERS.find((p) => p.label === msg.provider)?.id || "" : "";
+    const providerId = known ? known.provider : msg.provider ? providerByLabel(msg.provider)?.id || "" : "";
     if (!known) setContainer(slot, { entryId: entry.id, provider: "", nick: "", uid: "", status: "none" });
-    const tab = { id: msg.id, owner: record, view, contents, slot, entryId: entry.id, provider: providerId, pendingCredential: null, loginProvider: null, loginSeen: "", loginPrev: null, preferredAccount: String(msg.account || ""), lastAccount: "", muted: false, nick: "", uid: "" };
+    const tab = {
+      id: msg.id,
+      owner: record,
+      view,
+      contents,
+      slot,
+      entryId: entry.id,
+      provider: providerId,
+      pendingCredential: null,
+      loginProvider: null,
+      loginOptionId: "",
+      loginMode: "",
+      loginNonce: "",
+      loginState: "",
+      loginAuthCompleted: false,
+      loginWindow: null,
+      loginSeen: "",
+      loginPrev: null,
+      preferredAccount: String(msg.account || ""),
+      lastAccount: "",
+      muted: false,
+      nick: "",
+      uid: ""
+    };
     record.tabs.set(msg.id, tab);
     const { win } = record;
     win.contentView.addChildView(view, 0);
@@ -613,6 +654,7 @@ module.exports = function startMicroClient(config) {
   function closeTab(record, id, fromGame = false, opts = {}) {
     const tab = record.tabs.get(id);
     if (!tab) return;
+    closeAuthWindow(tab);
     record.tabs.delete(id);
     record.order = record.order.filter((x) => x !== id);
     clearTimeout(recoveryTimers.get(tab.contents));
@@ -806,8 +848,14 @@ module.exports = function startMicroClient(config) {
     tab.pendingCredential = null;
     if (tab.loginProvider) {
       tab.loginProvider = null;
+      closeAuthWindow(tab);
       qrClose(record, tab, "switch-entry");
     }
+    tab.loginMode = "";
+    tab.loginOptionId = "";
+    tab.loginNonce = "";
+    tab.loginState = "";
+    tab.loginAuthCompleted = false;
     writeSettings({ lastEntry: entry.id, guideDone: true });
     setTitle(record);
     log("login-trace switch entry slot=", tab.slot, "from=", from, "to=", entry.id, "logout=", Boolean(opts.logout), entry.verified ? "" : "(unverified)");
@@ -817,7 +865,7 @@ module.exports = function startMicroClient(config) {
   }
   function qrOpen(record, tab, provider) {
     tab.loginSeen = "loading";
-    chromeSend(record, "jnd-chrome-qr", { action: "open", id: tab.id, provider: provider.label, stage: "loading", qr: "", text: "" });
+    chromeSend(record, "jnd-chrome-qr", { action: "open", id: tab.id, provider: provider.label, brand: provider.brand || "", mode: provider.mode || "qr", stage: "loading", qr: "", text: "" });
     log("login-trace qr open slot=", tab.slot, "provider=", provider.id);
   }
   function qrClose(record, tab, reason) {
@@ -828,24 +876,118 @@ module.exports = function startMicroClient(config) {
     const stage = String(state?.stage || "");
     if (/captcha|identify/i.test(stage)) return "yield";
     if (state?.error) return "error";
+    if (tab.loginMode === "browser") {
+      if (!stage || stage === "setup" || /_browser_login$/.test(stage)) return "loading";
+      return "exchanging";
+    }
     if (stage === "waiting_confirmation") return "confirm";
     if (state?.qr) return "scan";
     if (tab.loginSeen === "scan" || tab.loginSeen === "confirm" || tab.loginSeen === "exchanging") return "exchanging";
     return "loading";
   }
-  function startProviderLogin(record, tab, providerId, opts = {}) {
-    const provider = providerById(providerId);
-    if (!provider || tab.contents.isDestroyed()) return;
-    if (tab.loginProvider === provider.id) {
-      log("login-trace provider re-pick ignored slot=", tab.slot, provider.id);
+  function providerPage(option, nonce, state) {
+    const page = String(option.page || "").replace(/\{nonce\}/g, encodeURIComponent(nonce)).replace(/\{state\}/g, encodeURIComponent(state));
+    const url = new URL(page);
+    if (url.protocol !== "https:" || url.username || url.password) throw new Error("渠道官方登录页必须使用 HTTPS");
+    return url.href;
+  }
+  function closeAuthWindow(tab) {
+    const win = tab.loginWindow;
+    tab.loginWindow = null;
+    if (!win) return;
+    try {
+      authWindowOwners.delete(win.webContents);
+    } catch (_) {
+    }
+    try {
+      if (!win.isDestroyed()) win.close();
+    } catch (_) {
+    }
+  }
+  function openAuthWindow(record, tab, option, nonce, state) {
+    closeAuthWindow(tab);
+    const windowName = `sgs-${option.provider}-${nonce}`;
+    const target = providerPage(option, nonce, state);
+    const win = new BrowserWindow({
+      width: 620,
+      height: 820,
+      minWidth: 420,
+      minHeight: 560,
+      parent: record.win && !record.win.isDestroyed() ? record.win : void 0,
+      title: `${option.brand || option.label} 官方登录`,
+      icon: path.join(__dirname, "..", channel.id, "build", "icon.ico"),
+      autoHideMenuBar: true,
+      show: false,
+      backgroundColor: "#ffffff",
+      webPreferences: {
+        preload: path.join(__dirname, "..", channel.id, "preload.js"),
+        contextIsolation: false,
+        sandbox: false,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: true,
+        backgroundThrottling: false,
+        partition: `persist:jinnangdai-${channel.id}-${tab.slot}`,
+        additionalArguments: [`--jnd-auth-window-name=${windowName}`]
+      }
+    });
+    tab.loginWindow = win;
+    authWindowOwners.set(win.webContents, tab);
+    configureSession(win.webContents.session);
+    const reveal = () => {
+      try {
+        if (!win.isDestroyed() && !win.isVisible()) win.show();
+      } catch (_) {
+      }
+    };
+    win.once("ready-to-show", reveal);
+    setTimeout(reveal, 1200);
+    win.webContents.on("render-process-gone", (_event, details) => log("auth render-process-gone", JSON.stringify(details || {})));
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      log("auth window-open", "slot=", tab.slot, "url=", url);
+      if (/^https?:/i.test(url)) setTimeout(() => {
+        if (!win.isDestroyed()) win.loadURL(url).catch((error) => log("auth open-loadURL-threw", error?.message || error));
+      }, 0);
+      return { action: "deny" };
+    });
+    win.on("closed", () => {
+      try {
+        authWindowOwners.delete(win.webContents);
+      } catch (_) {
+      }
+      const current = tab.loginWindow === win;
+      if (current) tab.loginWindow = null;
+      if (!current || record.closing || tab.loginProvider !== option.id) return;
+      setTimeout(() => {
+        if (record.closing || tab.loginAuthCompleted || tab.loginProvider !== option.id) return;
+        cancelProviderLogin(record, tab, "auth-window-closed");
+      }, 300);
+    });
+    win.loadURL(target).catch((error) => {
+      log("auth window load failed", target.split("?")[0], error?.message || error);
+      if (!win.isDestroyed()) showErrorPage(win.webContents, `无法打开渠道官方登录页：${error?.message || error}`);
+    });
+    return win;
+  }
+  function startProviderLogin(record, tab, optionId, opts = {}) {
+    const option = providerById(optionId);
+    if (!option || tab.contents.isDestroyed()) return;
+    if (tab.loginProvider === option.id) {
+      log("login-trace provider re-pick ignored slot=", tab.slot, option.id);
       return;
     }
+    closeAuthWindow(tab);
     const k = getContainer(tab.slot);
     if (!tab.loginPrev) tab.loginPrev = { entryId: k.entryId, provider: k.provider };
-    tab.loginProvider = provider.id;
+    tab.loginProvider = option.id;
+    tab.loginOptionId = option.id;
+    tab.provider = option.id;
     tab.loginSeen = "";
-    setContainer(tab.slot, { entryId: "guanfu", provider: provider.id, nick: "", uid: "", status: "none" });
-    log("login-trace provider pick slot=", tab.slot, "provider=", provider.id, "logout=", Boolean(opts.logout));
+    tab.loginMode = option.mode === "browser" ? "browser" : "qr";
+    tab.loginNonce = tab.loginMode === "browser" ? crypto.randomBytes(16).toString("hex") : "";
+    tab.loginState = tab.loginMode === "browser" && (option.provider === "xiaomi" || option.provider === "steam") ? tab.loginNonce : "";
+    tab.loginAuthCompleted = false;
+    setContainer(tab.slot, { entryId: "guanfu", provider: option.id, nick: "", uid: "", status: "none" });
+    log("login-trace provider pick slot=", tab.slot, "provider=", option.id, "mode=", tab.loginMode, "logout=", Boolean(opts.logout));
     const contents = tab.contents;
     const onLoginPage = () => {
       try {
@@ -856,9 +998,18 @@ module.exports = function startMicroClient(config) {
       }
     };
     const begin = () => {
-      if (contents.isDestroyed() || tab.loginProvider !== provider.id) return;
-      qrOpen(record, tab, provider);
-      contents.send("jnd-login-start", provider.id);
+      if (contents.isDestroyed() || tab.loginProvider !== option.id) return;
+      qrOpen(record, tab, option);
+      if (tab.loginMode === "browser") {
+        try {
+          openAuthWindow(record, tab, option, tab.loginNonce, tab.loginState);
+        } catch (error) {
+          log("auth window create failed", error?.message || error);
+          chromeSend(record, "jnd-chrome-qr", { action: "update", id: tab.id, provider: option.label, brand: option.brand || "", mode: "browser", stage: "error", qr: "", text: `无法打开官方登录窗口：${error?.message || error}` });
+          return;
+        }
+      }
+      contents.send("jnd-login-start", { provider: option.provider, mode: tab.loginMode, nonce: tab.loginNonce, state: tab.loginState });
     };
     const official = entryById("guanfu");
     if (tab.entryId !== official.id) {
@@ -882,10 +1033,17 @@ module.exports = function startMicroClient(config) {
   function cancelProviderLogin(record, tab, reason) {
     if (!tab.loginProvider) return;
     tab.loginProvider = null;
+    closeAuthWindow(tab);
     qrClose(record, tab, reason);
     if (!tab.contents.isDestroyed()) tab.contents.send("jnd-login-cancel");
+    tab.loginMode = "";
+    tab.loginOptionId = "";
+    tab.loginNonce = "";
+    tab.loginState = "";
+    tab.loginAuthCompleted = false;
     const prev = tab.loginPrev;
     tab.loginPrev = null;
+    tab.provider = prev?.provider || "";
     if (prev) setContainer(tab.slot, { entryId: prev.entryId, provider: prev.provider, status: "none", nick: "", uid: "" });
     log("login-trace cancel slot=", tab.slot, "reason=", reason, "restore=", JSON.stringify(prev));
   }
@@ -1090,6 +1248,7 @@ module.exports = function startMicroClient(config) {
     for (const [, record] of windows) {
       for (const [, tab] of record.tabs) {
         if (tab.contents.isDestroyed()) continue;
+        closeAuthWindow(tab);
         try {
           await tab.contents.session.clearStorageData();
         } catch (error) {
@@ -1109,6 +1268,11 @@ module.exports = function startMicroClient(config) {
           tab.loginPrev = null;
           qrClose(record, tab, "logout-all");
         }
+        tab.loginMode = "";
+        tab.loginOptionId = "";
+        tab.loginNonce = "";
+        tab.loginState = "";
+        tab.loginAuthCompleted = false;
         const entry = entryById(tab.entryId) || ENTRIES[0];
         tab.contents.loadURL(entryUrl(entry)).catch((error) => log("logout reload failed", error?.message || error));
       }
@@ -1120,6 +1284,28 @@ module.exports = function startMicroClient(config) {
   }
   const gmStoreDirectory = () => path.join(app.getPath("userData"), "gm-store");
   const gmKey = (sender, componentId) => `slot-${tabOf(sender)?.tab.slot || 0}/${componentId}`;
+  const LOGIN_RESULT_PREFIX = /^sgs-(?:vivo|oppo|steam|xiaomi)-page-result-v1:/;
+  const isLoginResultKey = (tab, key) => Boolean(tab.loginNonce) && key.startsWith("sgs-") && LOGIN_RESULT_PREFIX.test(key) && key.endsWith(tab.loginNonce);
+  function gmBroadcast(key, componentId, name, value, deleted) {
+    const deliver = (contents) => {
+      if (!contents || contents.isDestroyed()) return;
+      try {
+        contents.send("jnd-gm-store-changed", componentId, name, value, deleted);
+      } catch (_) {
+      }
+    };
+    for (const [, record] of windows) for (const [, tab] of record.tabs) {
+      if (`slot-${tab.slot}/${componentId}` === key) deliver(tab.contents);
+    }
+    for (const [, tab] of authWindowOwners) {
+      if (`slot-${tab.slot}/${componentId}` === key) {
+        try {
+          deliver(tab.loginWindow?.webContents);
+        } catch (_) {
+        }
+      }
+    }
+  }
   const gmStores = /* @__PURE__ */ new Map();
   const gmFlushTimers = /* @__PURE__ */ new Map();
   function gmStore(componentId) {
@@ -1204,14 +1390,20 @@ module.exports = function startMicroClient(config) {
     ipcMain.on("jnd-gm-store-set", (event, componentId, key, value) => {
       const id = String(componentId);
       if (!gmAllowed(id) || typeof key !== "string") return;
-      gmStore(gmKey(event.sender, id))[key] = value;
-      gmFlush(gmKey(event.sender, id));
+      const storeKey = gmKey(event.sender, id);
+      gmStore(storeKey)[key] = value;
+      gmFlush(storeKey);
+      gmBroadcast(storeKey, id, key, value, false);
+      const found = tabOf(event.sender);
+      if (found && id === "unified-login" && isLoginResultKey(found.tab, key)) found.tab.loginAuthCompleted = true;
     });
     ipcMain.on("jnd-gm-store-delete", (event, componentId, key) => {
       const id = String(componentId);
       if (!gmAllowed(id) || typeof key !== "string") return;
-      delete gmStore(gmKey(event.sender, id))[key];
-      gmFlush(gmKey(event.sender, id));
+      const storeKey = gmKey(event.sender, id);
+      delete gmStore(storeKey)[key];
+      gmFlush(storeKey);
+      gmBroadcast(storeKey, id, key, void 0, true);
     });
     ipcMain.handle("jnd-gm-xhr", async (event, componentId, requestId, request) => {
       const id = String(componentId);
@@ -1325,7 +1517,7 @@ module.exports = function startMicroClient(config) {
           const entry = entryByLabel(String(msg.entry));
           if (entry) switchEntry(record, tab, entry.id, { logout: Boolean(msg.logout) });
         } else if (msg.type === "provider") {
-          const provider = PROVIDERS.find((p) => p.label === String(msg.provider));
+          const provider = providerByLabel(String(msg.provider));
           if (provider) startProviderLogin(record, tab, provider.id, { logout: Boolean(msg.logout) });
         }
       } catch (error) {
@@ -1493,13 +1685,21 @@ module.exports = function startMicroClient(config) {
       if (state?.loggedIn) {
         const patch = { status: "landing", entryId: found.tab.entryId };
         if (state.nickname) patch.nick = String(state.nickname);
-        if (state.provider) patch.provider = String(state.provider);
+        const loginProvider = found.tab.loginOptionId || found.tab.provider || String(state.provider || "");
+        if (loginProvider) patch.provider = loginProvider;
+        if (loginProvider) found.tab.provider = loginProvider;
         setContainer(slot, patch);
         log("login-trace landing slot=", slot, "loggedIn=", true, "nick=", state.nickname ? "yes" : "no", "provider=", state.provider || "");
         if (found.tab.loginProvider) {
           found.tab.loginProvider = null;
           found.tab.loginPrev = null;
+          closeAuthWindow(found.tab);
           qrClose(found.record, found.tab, "landing");
+          found.tab.loginMode = "";
+          found.tab.loginOptionId = "";
+          found.tab.loginNonce = "";
+          found.tab.loginState = "";
+          found.tab.loginAuthCompleted = false;
         }
       } else {
         setContainer(slot, { status: "none", nick: "", uid: "" });
@@ -1541,10 +1741,18 @@ module.exports = function startMicroClient(config) {
       if (!found || !found.tab.loginProvider) return;
       const { record, tab } = found;
       if (String(state?.stage || "") === "ready") {
+        const loginProvider = tab.loginOptionId || tab.loginProvider || String(state.provider || tab.provider || "");
         tab.loginProvider = null;
         tab.loginPrev = null;
+        tab.provider = loginProvider;
+        closeAuthWindow(tab);
         qrClose(record, tab, "ready");
-        setContainer(tab.slot, { provider: String(state.provider || tab.provider || ""), status: "landing" });
+        setContainer(tab.slot, { provider: loginProvider, status: "landing" });
+        tab.loginMode = "";
+        tab.loginOptionId = "";
+        tab.loginNonce = "";
+        tab.loginState = "";
+        tab.loginAuthCompleted = false;
         log("login-trace ready slot=", tab.slot, "provider=", state.provider);
         return;
       }
@@ -1552,7 +1760,9 @@ module.exports = function startMicroClient(config) {
       if (stage !== tab.loginSeen || stage === "scan") {
         if (stage !== tab.loginSeen) log("login-trace stage slot=", tab.slot, "script=", state?.stage, "card=", stage, "qr=", state?.qr ? "yes" : "no", state?.error ? JSON.stringify(state.error) : "");
         tab.loginSeen = stage;
-        chromeSend(record, "jnd-chrome-qr", { action: "update", id: tab.id, provider: providerById(tab.loginProvider)?.label || "", stage, qr: String(state?.qr || ""), text: String(state?.text || "") });
+        const option = providerById(tab.loginOptionId || tab.loginProvider);
+        chromeSend(record, "jnd-chrome-qr", { action: "update", id: tab.id, provider: option?.label || "", brand: option?.brand || "", mode: tab.loginMode || "qr", stage, qr: String(state?.qr || ""), text: String(state?.text || "") });
+        if (stage === "error") closeAuthWindow(tab);
       }
     });
     ipcMain.on("jnd-chrome-qr-cancel", (event, m) => {
@@ -1566,8 +1776,14 @@ module.exports = function startMicroClient(config) {
       if (!record || !tab || !tab.loginProvider) return;
       const id = tab.loginProvider;
       tab.loginProvider = null;
+      tab.loginMode = "";
+      tab.loginOptionId = "";
+      tab.loginNonce = "";
+      tab.loginState = "";
+      tab.loginAuthCompleted = false;
       log("login-trace retry slot=", tab.slot, id);
       if (!tab.contents.isDestroyed()) tab.contents.send("jnd-login-cancel");
+      closeAuthWindow(tab);
       qrClose(record, tab, "retry");
       setTimeout(() => startProviderLogin(record, tab, id), 200);
     });

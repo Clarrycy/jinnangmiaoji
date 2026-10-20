@@ -9,6 +9,17 @@ const gm_shim_ = require("./gm-shim");
 const { createGmShim, wrapWithGm } = gm_shim_;
 const direct_login_bridge_ = require("./direct-login-bridge");
 const { installDirectEventBridge } = direct_login_bridge_;
+const AUTH_WINDOW_NAME = (() => {
+  const prefix = "--jnd-auth-window-name=";
+  const value = (process.argv || []).find((argument) => argument.startsWith(prefix))?.slice(prefix.length) || "";
+  return /^sgs-(?:vivo|oppo|steam|xiaomi)-[a-f0-9]{32}$/.test(value) ? value : "";
+})();
+if (AUTH_WINDOW_NAME) {
+  try {
+    window.name = AUTH_WINDOW_NAME;
+  } catch (_) {
+  }
+}
 module.exports = function startInjector(config) {
   const channel = String(config?.hostChannel || config?.id || "unknown");
   function report(level, message, extra = {}) {
@@ -389,6 +400,16 @@ ${record.code}
   function installLoginBridge() {
     let unsubscribe = null;
     let pending = null;
+    const startLogin = (request) => {
+      const provider = String(request?.provider || "");
+      if (!provider) return;
+      const options = {
+        mode: request?.mode === "browser" ? "browser" : "qr",
+        ...request?.nonce ? { nonce: String(request.nonce) } : {},
+        ...request?.state ? { state: String(request.state) } : {}
+      };
+      return window.__JND_UNIFIED_LOGIN.start(provider, options).catch((error) => report("warn", `统一登录器发起失败：${error?.message || error}`));
+    };
     const attach = () => {
       const bridge = window.__JND_UNIFIED_LOGIN;
       if (!bridge || unsubscribe) return Boolean(bridge);
@@ -411,15 +432,23 @@ ${record.code}
         }
       }, 400);
       if (pending) {
-        const provider = pending;
+        const request = pending;
         pending = null;
-        void bridge.start(provider).catch((error) => report("warn", `统一登录器发起失败：${error?.message || error}`));
+        void startLogin(request);
       }
       return true;
     };
-    ipcRenderer.on("jnd-login-start", (_event, provider) => {
-      if (attach()) void window.__JND_UNIFIED_LOGIN.start(String(provider)).catch((error) => report("warn", `统一登录器发起失败：${error?.message || error}`));
-      else pending = String(provider);
+    ipcRenderer.on("jnd-login-start", (_event, request) => {
+      const value = typeof request === "string" ? { provider: request } : request;
+      const normalized = {
+        provider: String(value?.provider || ""),
+        mode: value?.mode === "browser" ? "browser" : "qr",
+        nonce: String(value?.nonce || ""),
+        state: String(value?.state || "")
+      };
+      if (!normalized.provider) return;
+      if (attach()) void startLogin(normalized);
+      else pending = normalized;
     });
     ipcRenderer.on("jnd-login-cancel", () => {
       pending = null;

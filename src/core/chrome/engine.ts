@@ -43,8 +43,8 @@ function mountChrome(opts: { S: Record<string, string>; ICON: string; SPEC: any;
   const { S, ICON, SPEC, host } = opts;
 // ===== 0 常量 =====
 const ENTRIES = ['官服', '4399', 'QQ 大厅', '7K7K', '百度', '360'];
-const PROVIDERS = ['WeGame - QQ', 'WeGame - 微信', 'bilibili 扫码登录', 'Steam 扫码登录', 'OPPO 扫码登录', '小米扫码登录', 'VIVO 扫码登录', '华为扫码登录', '荣耀扫码登录'];
-const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀' };
+const PROVIDERS = ['WeGame - QQ', 'WeGame - 微信', 'bilibili 扫码登录', 'Steam 扫码登录', 'OPPO 扫码登录', '小米扫码登录', 'VIVO 扫码登录', '华为扫码登录', '荣耀扫码登录', 'Steam 官方登录（账号密码 / Steam Guard）', 'OPPO 官方登录（账号密码 / 短信 / 扫码）', '小米官方登录（账号密码 / 短信）', 'VIVO 官方登录（账号密码 / 短信 / 扫码）'];
+const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀', 'Steam 官方登录（账号密码 / Steam Guard）': 'Steam', 'OPPO 官方登录（账号密码 / 短信 / 扫码）': 'OPPO', '小米官方登录（账号密码 / 短信）': '小米', 'VIVO 官方登录（账号密码 / 短信 / 扫码）': 'VIVO' };
 const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
 const NICKS = ['范例玩家甲', '范例玩家乙', '范例玩家丙', '小号二', '小号三']; /* harness 里新标签的假昵称；不要放真实玩家名 */
 const settings = host.data.settings;
@@ -276,7 +276,9 @@ function openEntryMenu(w: Win, t: Tab) {
     const switchEntry = (e: string) => { t.entry = e; t.provider = null; t.nick = ''; t.status = 'none'; host.tabs?.entry(t, e, { logout: true }); render(w); };
     for (const e of ENTRIES) m.append(menuItem(e, () => { closeAll(); if (e === t.entry && !t.provider) return; if (loggedIn()) dialog({ title: '切换服务器？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换服务器', onOk: () => switchEntry(e) }); else { t.entry = e; t.provider = null; host.tabs?.entry(t, e); render(w); } }, { checked: e === t.entry && !t.provider }));
     const sep = document.createElement('div'); sep.className = 'sep'; m.append(sep);
-    const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] + ' 扫码' : '其他渠道服', () => { subOpen = !subOpen; draw(); }, { sub: true, open: subOpen }); other.onmouseenter = () => { if (!subOpen) { subOpen = true; draw(); } }; m.append(other);
+    const providerName = t.provider ? (PROVIDER_CHIP[t.provider] || t.provider) : '';
+    const providerAction = t.provider ? (/官方登录/.test(t.provider) ? ' 登录' : ' 扫码') : '';
+    const other = menuItem(t.provider ? providerName + providerAction : '其他渠道服', () => { subOpen = !subOpen; draw(); }, { sub: true, open: subOpen }); other.onmouseenter = () => { if (!subOpen) { subOpen = true; draw(); } }; m.append(other);
     sub.hidden = !subOpen;
     const pickProvider = (p: string, logout: boolean) => { t.provider = p; t.entry = PROVIDER_CHIP[p]; t.nick = ''; t.status = 'none'; render(w); if (host.tabs) host.tabs.provider(t, p, { logout }); else { q(el, '.game').textContent = ''; qrPrompt({ provider: p, stage: 'loading', qr: '', text: '' }); } };
     if (subOpen) { sub.textContent = ''; for (const p of PROVIDERS) sub.append(menuItem(p, () => { closeAll(); if (loggedIn()) dialog({ title: '切换登录方式？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换登录方式', onOk: () => pickProvider(p, true) }); else pickProvider(p, false); }, { checked: t.provider === p })); sub.style.left = (r.left - wr.left - 8 + 176 + 2) + 'px'; sub.style.top = (r.bottom - wr.top + 2 + other.offsetTop) + 'px'; }
@@ -437,19 +439,19 @@ function dialog(o: { title: string; body: string; cancel: string; ok: string; da
 
 // 扫码卡：与对话框同一张皮，居中（它不是决定，是等待）。阶段由宿主映射统一登录器的快照：loading／scan／confirm／exchanging／error；ready 由宿主直接收卡。
 // 没有按钮：取消＝点卡外或 Esc；刷新＝点码上的刷新标识。状态都画在码里（转圈／已扫码／刷新），卡的骨架不变。文案全部是草稿，等作者审定。
-type QrModel = { provider: string; stage: 'loading' | 'scan' | 'confirm' | 'exchanging' | 'error' | 'yield'; qr: string; text: string };
+type QrModel = { provider: string; brand?: string; mode?: 'qr' | 'browser'; stage: 'loading' | 'scan' | 'confirm' | 'exchanging' | 'error' | 'yield'; qr: string; text: string };
 let qrEl: HTMLElement | null = null; let qrCancelCb: (() => void) | null = null; let qrRetryCb: (() => void) | null = null; let qrTab: number | null = null; let qrYield = false;
 /* 卡片只属于一个标签：当前标签不是它的就藏起来（主进程切标签后会 render） */
 function syncCardTabs(w: Win) { if (qrEl) qrEl.hidden = qrYield || (qrTab !== null && qrTab !== w.cur); if (saveEl) saveEl.hidden = saveTab !== null && saveTab !== w.cur; }
-const QR_APP: Record<string, string> = { 'WeGame - QQ': 'QQ', 'WeGame - 微信': '微信', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀' };
+const QR_APP: Record<string, string> = { 'WeGame - QQ': 'QQ', 'WeGame - 微信': '微信', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀', 'Steam 官方登录（账号密码 / Steam Guard）': 'Steam', 'OPPO 官方登录（账号密码 / 短信 / 扫码）': 'OPPO', '小米官方登录（账号密码 / 短信）': '小米', 'VIVO 官方登录（账号密码 / 短信 / 扫码）': 'VIVO' };
 function qrTexts(m: QrModel): [string, string] {
-  const app = QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, '');
+  const app = m.brand || QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, '');
   const sp = /^[A-Za-z]/.test(app) ? ` ${app} ` : app;
-  if (m.stage === 'loading') return ['正在获取二维码', ''];
-  if (m.stage === 'scan') return [`用手机${sp}扫码`, '扫码后在手机上确认登录'];
+  if (m.stage === 'loading') return [m.mode === 'browser' ? (m.text || '正在打开官方登录窗口') : '正在获取二维码', m.mode === 'browser' ? '账号密码、验证码只输入渠道官方页面' : ''];
+  if (m.stage === 'scan') return [m.mode === 'browser' ? (m.text || `请在${sp}官方窗口完成登录`) : `用手机${sp}扫码`, m.mode === 'browser' ? '完成后会自动继续，不需要回到本窗口' : '扫码后在手机上确认登录'];
   if (m.stage === 'confirm') return ['已扫码', '请在手机上确认登录'];
   if (m.stage === 'exchanging') return ['正在登录', ''];
-  if (m.stage === 'error') return [m.text || '登录未完成', '点击二维码重新获取'];
+  if (m.stage === 'error') return [m.text || '登录未完成', m.mode === 'browser' ? '点击此处重新打开官方登录窗口' : '点击二维码重新获取'];
   return ['', ''];
 }
 /* 私有二维码：各家给的码样式不一（中间带 logo、留白不同、尺寸不同），解出内容后用同一规格重画：
@@ -492,8 +494,8 @@ function updateQr(m: QrModel) {
 function qrPrompt(m: QrModel, onCancel?: () => void, onRetry?: () => void, tabId?: number) {
   const vp = document.querySelector('.win #viewport') as HTMLElement; closeQr(); vp.querySelector('.scrim')?.remove(); qrTab = tabId ?? null; qrYield = false;
   const scrim = document.createElement('div'); scrim.className = 'scrim center'; scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><div class="qrbox"><img alt="" hidden><div class="ov"><i class="spin"></i><i class="ok">${S.check}</i><i class="again">${S.refresh || S.update || ''}</i></div></div><div class="qst"></div><div class="qsub"></div></div>`;
-  q(scrim, 'h3').textContent = m.provider.replace(/ ?扫码登录$/, '').replace(' - ', ' · ');
-  const bi = q(scrim, '.bi') as unknown as HTMLImageElement; const icon = BRAND_ICON[m.provider]; if (icon) { bi.src = icon; bi.hidden = false; }
+  q(scrim, 'h3').textContent = (m.brand || m.provider).replace(/ ?扫码登录$/, '').replace(' - ', ' · ');
+  const bi = q(scrim, '.bi') as unknown as HTMLImageElement; const icon = BRAND_ICON[m.provider] || (m.brand ? BRAND_ICON[m.brand] : ''); if (icon) { bi.src = icon; bi.hidden = false; }
   const cancel = () => { const cb = qrCancelCb; closeQr(); cb?.(); };
   (q(scrim, '.qrbox') as HTMLElement).onclick = () => { if ((q(scrim, '.dlg') as HTMLElement).dataset.stage === 'error') qrRetryCb?.(); };
   scrim.onclick = e => { if (e.target === scrim) cancel(); };

@@ -61,7 +61,7 @@ window.addEventListener('DOMContentLoaded', () => {
   /* 扫码卡由引擎画：open／update／close 三个动作；取消与重试回宿主 */
   ipcRenderer.on('jnd-chrome-qr', (_e, m: any) => {
     if (m.action === 'close') { api.closeQr(); return; }
-    const model = { provider: String(m.provider || ''), stage: m.stage, qr: String(m.qr || ''), text: String(m.text || '') };
+    const model = { provider: String(m.provider || ''), brand: String(m.brand || ''), mode: m.mode === 'browser' ? 'browser' as const : 'qr' as const, stage: m.stage, qr: String(m.qr || ''), text: String(m.text || '') };
     if (m.action === 'open') api.qrPrompt(model, () => send('jnd-chrome-qr-cancel', { id: m.id }), () => send('jnd-chrome-qr-retry', { id: m.id }), Number(m.id)); else api.updateQr(model);
   });
   ipcRenderer.on('jnd-chrome-save-prompt', (_e, m: any) => api.savePrompt({ account: String(m.account || ''), password: String(m.password || ''), mode: m.mode === 'changed' ? 'changed' : 'new' }, r => send('jnd-chrome-save-result', { entryId: m.entryId, ...r }), m.id === undefined ? undefined : Number(m.id)));

@@ -9,7 +9,7 @@ const file = path.join(__dirname, '..', 'jinnangdai', 'payload', 'unified-login.
 const code = fs.readFileSync(file, 'utf8');
 const header = parseUserScriptHeader(code);
 assert.equal(header.name, '统一登录器 · 多渠道直连');
-assert.equal(header.version, '1.1.0');
+assert.equal(header.version, '1.1.1');
 for (const host of ['hnoauth-login.cloud.hihonor.com', 'hnid-drcn.cloud.hihonor.com',
   'hnid-drcn.platform.hihonorcloud.com', 'gamecenter-api-drcn.hispace.hihonorcloud.com']) {
   assert(header.connect.includes(host), `missing Honor @connect ${host}`);
@@ -22,7 +22,7 @@ for (const grant of ['GM_addValueChangeListener', 'GM_removeValueChangeListener'
 }
 assert.match(code, /\/\* DIRECT-ENGINE-BEGIN \*\//);
 assert.match(code, /\/\* DIRECT-ENGINE-END \*\//);
-assert.match(code, /const VERSION = '1\.1\.0'/);
+assert.match(code, /const VERSION = '1\.1\.1'/);
 assert.match(code, /source: 'sgs-multichannel'/);
 assert.match(code, /const HONOR_CHANNEL = 320463/);
 assert.match(code, /function honorURL\(/);
@@ -44,8 +44,14 @@ assert.match(code, /notify,\r?\n\s+providers:/, 'the bridge must expose notify')
 const providersMatch = /providers:\s*Object\.freeze\(\[([^\]]+)\]\)/.exec(code);
 assert(providersMatch, 'the embedded API must declare its providers');
 const providers = [...providersMatch[1].matchAll(/'([a-z]+)'/g)].map(match => match[1]);
-assert.deepEqual(providers, PROVIDERS.map(provider => provider.id),
+assert.deepEqual(providers, PROVIDERS.filter(provider => provider.mode === 'qr').map(provider => provider.provider),
   'bridge provider order must match the shell menu');
+assert.match(code, /const XIAOMI_PAGE_RESULT_PREFIX = 'sgs-xiaomi-page-result-v1:'/);
+assert.match(code, /function waitForXiaomiPage\(/);
+assert.match(code, /const mode = \['vivo', 'oppo', 'steam', 'xiaomi'\]\.includes\(provider\)/);
+assert.match(code, /if \(a\.mode === 'browser'\) a\.xiaomiCode = await waitForXiaomiPage\(a\)/);
+assert.match(code, /XIAOMI_PAGE_RESULT_KEY \+ nonce/);
+assert.match(code, /XIAOMI_BROWSER_TIMEOUT: '等待小米官方登录超时/);
 
 const callbackPages = [
   'https://web.sanguosha.com/login/x/index',

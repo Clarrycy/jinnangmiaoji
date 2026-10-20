@@ -9,6 +9,15 @@ const { createGmShim, wrapWithGm } = gm_shim_;
 import direct_login_bridge_ = require('./direct-login-bridge');
 const { installDirectEventBridge } = direct_login_bridge_;
 
+// 主进程打开的渠道官方登录窗口用 additionalArguments 把桥接名带进 preload。
+// 必须在页面脚本之前设置 window.name；Vivo／OPPO 的回调桥用它关联本次登录。
+const AUTH_WINDOW_NAME = (() => {
+  const prefix = '--jnd-auth-window-name=';
+  const value = (process.argv || []).find(argument => argument.startsWith(prefix))?.slice(prefix.length) || '';
+  return /^sgs-(?:vivo|oppo|steam|xiaomi)-[a-f0-9]{32}$/.test(value) ? value : '';
+})();
+if (AUTH_WINDOW_NAME) { try { window.name = AUTH_WINDOW_NAME; } catch (_) {} }
+
 export = function startInjector(config) {
   const channel = String(config?.hostChannel || config?.id || 'unknown');
 
@@ -329,19 +338,32 @@ export = function startInjector(config) {
   }
   function installLoginBridge() {
     let unsubscribe = null;
-    let pending = null;
+    let pending: { provider: string; mode: 'qr' | 'browser'; nonce: string; state: string } | null = null;
+    const startLogin = request => {
+      const provider = String(request?.provider || '');
+      if (!provider) return;
+      const options = {
+        mode: request?.mode === 'browser' ? 'browser' : 'qr',
+        ...(request?.nonce ? { nonce: String(request.nonce) } : {}),
+        ...(request?.state ? { state: String(request.state) } : {}),
+      };
+      return window.__JND_UNIFIED_LOGIN.start(provider, options).catch(error => report('warn', `统一登录器发起失败：${error?.message || error}`));
+    };
     const attach = () => {
       const bridge = window.__JND_UNIFIED_LOGIN;
       if (!bridge || unsubscribe) return Boolean(bridge);
       unsubscribe = bridge.subscribe(state => { try { ipcRenderer.send('jnd-login-state', state); } catch (_) {} });
       /* 订阅只在二维码变化时通知；「已扫码待确认」这种阶段变化靠轮询快照拿 */
       let last = ''; setInterval(() => { try { const s = bridge.get(); const key = `${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ''}`; if (key !== last) { last = key; ipcRenderer.send('jnd-login-state', s); } } catch (_) {} }, 400);
-      if (pending) { const provider = pending; pending = null; void bridge.start(provider).catch(error => report('warn', `统一登录器发起失败：${error?.message || error}`)); }
+      if (pending) { const request = pending; pending = null; void startLogin(request); }
       return true;
     };
-    ipcRenderer.on('jnd-login-start', (_event, provider) => {
-      if (attach()) void window.__JND_UNIFIED_LOGIN.start(String(provider)).catch(error => report('warn', `统一登录器发起失败：${error?.message || error}`));
-      else pending = String(provider);
+    ipcRenderer.on('jnd-login-start', (_event, request) => {
+      const value = typeof request === 'string' ? { provider: request } : request;
+      const normalized = { provider: String(value?.provider || ''), mode: value?.mode === 'browser' ? 'browser' as const : 'qr' as const,
+        nonce: String(value?.nonce || ''), state: String(value?.state || '') };
+      if (!normalized.provider) return;
+      if (attach()) void startLogin(normalized); else pending = normalized;
     });
     ipcRenderer.on('jnd-login-cancel', () => { pending = null; try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {} });
     // 脚本在 DOMContentLoaded 挂载；轮询到桥出现为止（最多 20 秒）。

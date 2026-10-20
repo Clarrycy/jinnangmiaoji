@@ -1,16 +1,25 @@
 // 由 src/core/gm-shim.ts 生成（node scripts/build-ts.js）；改源文件，不要改这里。
 "use strict";
 function createGmShim(ipcRenderer, component, info) {
-  const componentId = String(component.id);
+  const shimComponentId = String(component.id);
   const store = /* @__PURE__ */ new Map();
   try {
-    const loaded = ipcRenderer.sendSync("jnd-gm-store-load", componentId);
+    const loaded = ipcRenderer.sendSync("jnd-gm-store-load", shimComponentId);
     if (loaded && typeof loaded === "object") {
       for (const [key, value] of Object.entries(loaded)) store.set(key, value);
     }
   } catch (_) {
   }
   let requestSerial = 0;
+  try {
+    ipcRenderer.on("jnd-gm-store-changed", (_event, componentId, key, value, deleted) => {
+      if (String(componentId) !== shimComponentId) return;
+      const name = String(key);
+      if (deleted) store.delete(name);
+      else store.set(name, value);
+    });
+  } catch (_) {
+  }
   function GM_getValue(key, fallback) {
     const name = String(key);
     if (!store.has(name)) return fallback;
@@ -22,7 +31,7 @@ function createGmShim(ipcRenderer, component, info) {
     const plain = value === void 0 ? null : JSON.parse(JSON.stringify(value));
     store.set(name, plain);
     try {
-      ipcRenderer.send("jnd-gm-store-set", componentId, name, plain);
+      ipcRenderer.send("jnd-gm-store-set", shimComponentId, name, plain);
     } catch (_) {
     }
   }
@@ -30,7 +39,7 @@ function createGmShim(ipcRenderer, component, info) {
     const name = String(key);
     store.delete(name);
     try {
-      ipcRenderer.send("jnd-gm-store-delete", componentId, name);
+      ipcRenderer.send("jnd-gm-store-delete", shimComponentId, name);
     } catch (_) {
     }
   }
@@ -40,7 +49,7 @@ function createGmShim(ipcRenderer, component, info) {
   function GM_xmlhttpRequest(details) {
     if (!details || typeof details !== "object" || !details.url) throw new Error("GM_xmlhttpRequest 缺少 url");
     requestSerial += 1;
-    const id = `${componentId}:${Date.now()}:${requestSerial}`;
+    const id = `${shimComponentId}:${Date.now()}:${requestSerial}`;
     let settled = false;
     const callbacks = {
       load: details.onload,
@@ -91,7 +100,7 @@ function createGmShim(ipcRenderer, component, info) {
       cookie: details.cookie,
       responseType: details.responseType
     };
-    ipcRenderer.invoke("jnd-gm-xhr", componentId, id, request).then(deliver, (error) => deliver({ kind: "error", error: String(error?.message || error) }));
+    ipcRenderer.invoke("jnd-gm-xhr", shimComponentId, id, request).then(deliver, (error) => deliver({ kind: "error", error: String(error?.message || error) }));
     return {
       abort() {
         try {
@@ -111,7 +120,7 @@ function createGmShim(ipcRenderer, component, info) {
     GM_info: Object.freeze({
       scriptHandler: "JinnangdaiMicro",
       version: String(info?.shellVersion || ""),
-      script: Object.freeze({ name: String(info?.name || component.label || componentId), version: String(info?.version || "") })
+      script: Object.freeze({ name: String(info?.name || component.label || shimComponentId), version: String(info?.version || "") })
     })
   });
 }

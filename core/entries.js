@@ -50,21 +50,56 @@ const ENTRIES = Object.freeze([
   })
 ]);
 const PROVIDERS = Object.freeze([
-  Object.freeze({ id: "qq", label: "WeGame - QQ" }),
-  Object.freeze({ id: "wx", label: "WeGame - 微信" }),
-  Object.freeze({ id: "bilibili", label: "bilibili 扫码登录" }),
-  Object.freeze({ id: "steam", label: "Steam 扫码登录" }),
-  Object.freeze({ id: "oppo", label: "OPPO 扫码登录" }),
-  Object.freeze({ id: "xiaomi", label: "小米扫码登录" }),
-  Object.freeze({ id: "vivo", label: "VIVO 扫码登录" }),
-  Object.freeze({ id: "huawei", label: "华为扫码登录" }),
-  Object.freeze({ id: "honor", label: "荣耀扫码登录" })
+  Object.freeze({ id: "qq", provider: "qq", label: "WeGame - QQ", mode: "qr", brand: "WeGame" }),
+  Object.freeze({ id: "wx", provider: "wx", label: "WeGame - 微信", mode: "qr", brand: "WeGame" }),
+  Object.freeze({ id: "bilibili", provider: "bilibili", label: "bilibili 扫码登录", mode: "qr", brand: "哔哩哔哩" }),
+  Object.freeze({ id: "steam", provider: "steam", label: "Steam 扫码登录", mode: "qr", brand: "Steam" }),
+  Object.freeze({ id: "oppo", provider: "oppo", label: "OPPO 扫码登录", mode: "qr", brand: "OPPO" }),
+  Object.freeze({ id: "xiaomi", provider: "xiaomi", label: "小米扫码登录", mode: "qr", brand: "小米" }),
+  Object.freeze({ id: "vivo", provider: "vivo", label: "VIVO 扫码登录", mode: "qr", brand: "VIVO" }),
+  Object.freeze({ id: "huawei", provider: "huawei", label: "华为扫码登录", mode: "qr", brand: "华为" }),
+  Object.freeze({ id: "honor", provider: "honor", label: "荣耀扫码登录", mode: "qr", brand: "荣耀" }),
+  Object.freeze({
+    id: "steam-web",
+    provider: "steam",
+    label: "Steam 官方登录（账号密码 / Steam Guard）",
+    mode: "browser",
+    brand: "Steam",
+    page: "https://store.steampowered.com/oauth/login?mobileminimal=1&response_type=token&client_id=6730F3F4&state={state}"
+  }),
+  Object.freeze({
+    id: "oppo-web",
+    provider: "oppo",
+    label: "OPPO 官方登录（账号密码 / 短信 / 扫码）",
+    mode: "browser",
+    brand: "OPPO",
+    page: "https://id.heytap.com/identity/web/v1/authn/auth-and-callback?bizAppKey=2CcnddQwhZJV3qjNMCzL4S&callback=https%3A%2F%2Fgame-login.heytap.com%2Fgame-union-h5%2Fh5%2Fclient-login%2Findex.html%3Fh5-next%3D1%26actId%3D90000016%26bizType%3Die&language=zh-CN&toRegisterPage=false"
+  }),
+  Object.freeze({
+    id: "xiaomi-web",
+    provider: "xiaomi",
+    label: "小米官方登录（账号密码 / 短信）",
+    mode: "browser",
+    brand: "小米",
+    page: "https://account.xiaomi.com/oauth2/authorize?client_id=2882303761517516898&response_type=code&scope=1%203&redirect_uri=http%3A%2F%2Fgame.xiaomi.com%2Foauthcallback%2Fmioauth&state={state}&_locale=zh_CN&skip_confirm=false"
+  }),
+  Object.freeze({
+    id: "vivo-web",
+    provider: "vivo",
+    label: "VIVO 官方登录（账号密码 / 短信 / 扫码）",
+    mode: "browser",
+    brand: "VIVO",
+    page: "https://joint.vivo.com.cn/game-subaccount-login/?from=login"
+  })
 ]);
 function entryById(id) {
   return ENTRIES.find((entry) => entry.id === id) || null;
 }
 function providerById(id) {
   return PROVIDERS.find((provider) => provider.id === id) || null;
+}
+function providerByLabel(label) {
+  return PROVIDERS.find((provider) => provider.label === label) || null;
 }
 const TEST_ORIGIN = String(process.env.JND_MICRO_TEST_ORIGIN || "");
 function matchesAnyEntry(url) {
@@ -80,4 +115,4 @@ function matchesAnyEntry(url) {
 function entriesForRenderer() {
   return ENTRIES.map(({ id, label, verified, hostChannel }) => ({ id, label, verified, hostChannel: hostChannel || id }));
 }
-module.exports = { TEST_ORIGIN, ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, entriesForRenderer, isOfficial };
+module.exports = { TEST_ORIGIN, ENTRIES, PROVIDERS, entryById, providerById, providerByLabel, matchesAnyEntry, entriesForRenderer, isOfficial };

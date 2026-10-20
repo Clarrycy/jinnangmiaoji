@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         统一登录器 · 多渠道直连
 // @namespace    jinnangdai.micro.unified-login
-// @version      1.1.0
+// @version      1.1.1
 // @description  在三国杀官网按渠道接入本人账号；支持官方扫码、官方网页登录和账号管理直达。可选保存本机可恢复的官方登录状态，绝不保存密码或验证码。
 // @match        https://web.sanguosha.com/*
 // @match        https://joint.vivo.com.cn/game-subaccount-login/*
@@ -69,6 +69,7 @@
   const VIVO_PENDING_NONCE_KEY = 'sgs-vivo-pending-nonce-v1';
   const VIVO_PAGE_STATE_PREFIX = 'sgs-vivo-page-state-v1:';
   const STEAM_PAGE_RESULT_PREFIX = 'sgs-steam-page-result-v1:';
+  const XIAOMI_PAGE_RESULT_PREFIX = 'sgs-xiaomi-page-result-v1:';
   function vivoBridgeNonce() {
     const fromName = /^sgs-vivo-([a-f0-9]{16,64})$/.exec(window.name || '');
     if (fromName) return fromName[1];
@@ -422,6 +423,28 @@
       }, 130000);
     } catch (_) {}
   }
+  function xiaomiCallbackBridge() {
+    const params = new URLSearchParams(location.search);
+    const state = String(params.get('state') || '');
+    const code = String(params.get('code') || '');
+    if (!/^[a-f0-9]{32}$/.test(state) || !code || code.length > 4096 || /[&=\r\n\x00]/.test(code)) return;
+    // The auth window carries its nonce in window.name. The OAuth state is
+    // normally the same value; keep it as a fallback for redirects that clear
+    // the window name.
+    const nonce = /^sgs-xiaomi-([a-f0-9]{16,64})$/.exec(String(window.name || ''))?.[1] || state;
+    const resultKey = XIAOMI_PAGE_RESULT_PREFIX + nonce;
+    try {
+      GM_setValue(resultKey, {v: 1, nonce, state, code,
+        href: location.href.slice(0, 2048), createdAt: Date.now(), expires: Date.now() + 120000});
+      try { history.replaceState(null, '', location.pathname); } catch (_) {}
+      setTimeout(() => {
+        try {
+          const current = GM_getValue(resultKey, null);
+          if (current?.nonce === nonce) GM_deleteValue(resultKey);
+        } catch (_) {}
+      }, 130000);
+    } catch (_) {}
+  }
   if (location.hostname === 'passport.vivo.com.cn') {
     vivoPassportBridge();
     return;
@@ -440,11 +463,16 @@
     steamCallbackBridge();
     return;
   }
+  if ((location.protocol === 'http:' || location.protocol === 'https:') &&
+    location.hostname === 'game.xiaomi.com' && location.pathname === '/oauthcallback/mioauth') {
+    xiaomiCallbackBridge();
+    return;
+  }
   try {
     const now = Date.now();
     for (const key of GM_listValues()) {
       if (!key.startsWith('sgs-vivo-page-result-v1:') && !key.startsWith('sgs-oppo-page-result-v1:') &&
-        !key.startsWith(STEAM_PAGE_RESULT_PREFIX) &&
+        !key.startsWith(STEAM_PAGE_RESULT_PREFIX) && !key.startsWith(XIAOMI_PAGE_RESULT_PREFIX) &&
         !key.startsWith(VIVO_PAGE_STATE_PREFIX)) continue;
       const value = GM_getValue(key, null);
       if (!value || !Number.isFinite(Number(value.expires)) || Number(value.expires) <= now) GM_deleteValue(key);
@@ -459,7 +487,7 @@
 /* DIRECT-ENGINE-BEGIN */
 (() => {
   'use strict';
-  const VERSION = '1.1.0';
+  const VERSION = '1.1.1';
   const ORIGIN = 'https://web.sanguosha.com';
   const SESSION_KEY = 'wegame.qq.session.v1';
   const SESSION_STORE_PREFIX = 'sgs-login-session-v3:';
@@ -500,6 +528,7 @@
   const VIVO_PAGE_RESULT_KEY = 'sgs-vivo-page-result-v1:';
   const VIVO_PAGE_STATE_PREFIX = 'sgs-vivo-page-state-v1:';
   const OPPO_PAGE_RESULT_KEY = 'sgs-oppo-page-result-v1:';
+  const XIAOMI_PAGE_RESULT_KEY = XIAOMI_PAGE_RESULT_PREFIX;
   const OPPO_CHANNEL = 320123;
   const BILI_CHANNEL = '120133';
   const WEGAME_CHANNEL = 320023;
@@ -2402,6 +2431,42 @@
     }
     throw failure('REDIRECT_LIMIT', 'xiaomi_oauth');
   }
+  async function waitForXiaomiPage(a) {
+    const stage = 'xiaomi_browser_login';
+    const nonce = String(a.browserNonce || '');
+    const state = String(a.state || '');
+    assert(/^[a-f0-9]{16,64}$/.test(nonce), 'XIAOMI_BROWSER_NONCE_MISSING', stage);
+    assert(/^[a-f0-9]{32}$/.test(state), 'XIAOMI_STATE_INVALID', stage);
+    const key = XIAOMI_PAGE_RESULT_KEY + nonce;
+    const deadline = Date.now() + 10 * 60 * 1000;
+    setBrowserNotice(a, '请在小米官方登录窗口使用账号密码、短信验证码或扫码完成登录，完成后会自动继续');
+    while (Date.now() < deadline) {
+      active(a);
+      let value = null;
+      try { value = GM_getValue(key, null); } catch (_) {}
+      if (value) {
+        try { GM_deleteValue(key); } catch (_) {}
+        assert(value.v === 1 && value.nonce === nonce, 'XIAOMI_PAGE_RESULT_INVALID', stage);
+        const createdAt = Number(value.createdAt), expires = Number(value.expires);
+        assert(Number.isFinite(createdAt) && Number.isFinite(expires) &&
+          expires > Date.now() && Date.now() - createdAt <= 120000, 'XIAOMI_PAGE_RESULT_EXPIRED', stage);
+        assert(typeof value.state === 'string' && value.state === state, 'XIAOMI_STATE_MISMATCH', stage);
+        let href;
+        try { href = new URL(String(value.href)); } catch (_) { throw failure('XIAOMI_PAGE_ORIGIN_MISMATCH', stage); }
+        assert((href.protocol === 'http:' || href.protocol === 'https:') &&
+          href.hostname === 'game.xiaomi.com' && href.pathname === '/oauthcallback/mioauth' &&
+          !href.port && !href.username && !href.password, 'XIAOMI_PAGE_ORIGIN_MISMATCH', stage);
+        const code = typeof value.code === 'string' ? value.code : '';
+        assert(code.length > 0 && code.length <= 4096 && !/[&=\r\n\x00]/.test(code),
+          'XIAOMI_PAGE_RESULT_INVALID', stage);
+        setBrowserNotice(a, '小米官方登录结果已收到，正在兑换游戏账号…');
+        a.stage = 'xiaomi_sdk';
+        return code;
+      }
+      await sleep(500);
+    }
+    throw failure('XIAOMI_BROWSER_TIMEOUT', stage);
+  }
   async function xiaomiCipher(value, decrypt = false) {
     // SDK AESEncryption: AES-128-ECB + PKCS#7, public shipped protocol key.
     // WebCrypto exposes CBC. Its first block with a zero IV is ECB; an extra
@@ -2458,8 +2523,11 @@
     if (!a.xiaomi && !a.session) {
       if (!a.xiaomiOAuth) {
         if (!a.xiaomiCode) {
-          if (!a.xiaomiChallenge && !a.xiaomiLocation) await prepareXiaomi(a);
-          await waitForXiaomi(a);
+          if (a.mode === 'browser') a.xiaomiCode = await waitForXiaomiPage(a);
+          else {
+            if (!a.xiaomiChallenge && !a.xiaomiLocation) await prepareXiaomi(a);
+            await waitForXiaomi(a);
+          }
         }
         const v = success(await xiaomiSDK(a, '/misdk/v2/oauth',
           // ViewLoginLayout.WebLoginListenerImpl sends type 4 to the SDK;
@@ -4763,7 +4831,7 @@
     delete a.grant; delete a.session;
   }
   async function start(provider = 'qq', options = {}) {
-    const mode = ['vivo', 'oppo', 'steam'].includes(provider) && options?.mode === 'browser' ? 'browser' : 'qr';
+    const mode = ['vivo', 'oppo', 'steam', 'xiaomi'].includes(provider) && options?.mode === 'browser' ? 'browser' : 'qr';
     assert(['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor'].includes(provider), 'PROVIDER_UNAVAILABLE', 'setup');
     const profileId = sessionText(options?.profileId, 256);
     if (profileId) assert(SESSION_PROFILE_PATTERN.test(profileId), 'PROFILE_ID_INVALID', 'setup');
@@ -4776,6 +4844,8 @@
     }
     busy = true; setProvidersBusy(true); ui.output.textContent = '';
     try {
+      const requestedNonce = mode === 'browser' ? String(options?.nonce || '') : '';
+      if (requestedNonce) assert(/^[a-f0-9]{16,64}$/.test(requestedNonce), 'BROWSER_NONCE_INVALID', 'setup');
       const requestedState = mode === 'browser' && options?.state ? String(options.state) : '';
       if (requestedState) assert(/^[a-f0-9]{32}$/.test(requestedState), 'BROWSER_STATE_INVALID', 'setup');
       // A new explicit start supersedes the previous flow. Releasing its lock and
@@ -4796,7 +4866,7 @@
         expires: Date.now() + (mode === 'browser' ? 11 * 60 * 1000 : 10 * 60 * 1000),
         stage: 'setup', cookies: new Cookies(), requests: new Set()};
       if (provider === 'steam' && mode === 'qr') restoreSteamCheckpoint(attempt);
-      if (mode === 'browser' && options?.nonce) attempt.browserNonce = String(options.nonce);
+      if (requestedNonce) attempt.browserNonce = requestedNonce;
       if (!releaseLock) await acquireLock(clientToken);
       const a = attempt;
       assert(a && a.clientToken === clientToken, 'ATTEMPT_EXPIRED', 'setup');
@@ -4910,6 +4980,11 @@
         STEAM_PAGE_RESULT_INVALID: 'Steam 官方回调格式异常，请重新登录',
         STEAM_STATE_MISMATCH: 'Steam 回调状态不匹配，本次授权已拒绝',
         STEAM_PAGE_RESULT_EXPIRED: 'Steam 官方回调已过期，请重新登录',
+        XIAOMI_BROWSER_TIMEOUT: '等待小米官方登录超时，请重新打开登录窗口',
+        XIAOMI_PAGE_RESULT_INVALID: '小米官方回调格式异常，请重新登录',
+        XIAOMI_PAGE_RESULT_EXPIRED: '小米官方回调已过期，请重新登录',
+        XIAOMI_PAGE_ORIGIN_MISMATCH: '小米官方回调来源不匹配，本次登录已拒绝',
+        XIAOMI_STATE_MISMATCH: '小米回调状态不匹配，本次授权已拒绝',
         VIVO_ACCOUNT_SELECTION_REQUIRED: 'Vivo 账号有多个子账号，请先在官方页面明确选择后重试',
         VIVO_REAL_NAME_REQUIRED: 'Vivo 账号未完成实名认证或当前状态不允许登录',
         BILI_GAME_CALLBACK_UNAVAILABLE: '已进入游戏页，但游戏没有就绪，未能交接触摸登录回调',
