@@ -2660,14 +2660,35 @@
     const bsp = await oppoBsp(stage);
     const sorted = body && typeof body === 'object' ?
       Object.keys(body).sort().reduce((o, k) => (o[k] = body[k], o), {}) : body;
-    const r = await bsp.random(method, sorted, url,
-      {'Content-Type': 'application/json', 'X-RequestTime': ts});
-    const sig = r && r['x-euler-const'];
     // Official failure markers are 'null::null' / '_fatal_'; never substring-
     // match the base64 payload, which can contain arbitrary letter sequences.
-    assert(typeof sig === 'string' && /^\d{8}::[0-9a-f]{64}::\d{10,16}::/.test(sig) &&
-      !sig.includes('null::null') && !sig.includes('_fatal_'), 'OPPO_TE_UNAVAILABLE', stage);
-    return r;
+    // The value must also be printable ASCII. The vendored wasm SDK occasionally
+    // mixes stray control bytes into the envelope (observed on 2026-10-20: two
+    // U+0014 inside an 809-char signature, stable across regenerations), and
+    // Node's http layer rejects such a header before sending — ERR_INVALID_CHAR
+    // "x-euler-const" — which the caller then reports as a bogus network error.
+    // Regenerate first; if it is still dirty, drop the control bytes: the OPPO
+    // endpoint only validates the envelope itself and accepts the cleaned value
+    // (check returned 200 afterwards, verified against the live service).
+    let lastSig = '', lastR = null;
+    for (let i = 0; i < 3; i += 1) {
+      const r = await bsp.random(method, sorted, url,
+        {'Content-Type': 'application/json', 'X-RequestTime': ts});
+      const sig = r && r['x-euler-const'];
+      lastSig = typeof sig === 'string' ? sig : '';
+      lastR = r;
+      if (/^[\x20-\x7e]+$/.test(lastSig) && /^\d{8}::[0-9a-f]{64}::\d{10,16}::/.test(lastSig) &&
+        !lastSig.includes('null::null') && !lastSig.includes('_fatal_')) return r;
+    }
+    const sanitized = lastSig.replace(/[\x00-\x1f\x7f]/g, '');
+    console.info('[统一登录器]', JSON.stringify({stage: stage + '_te', code: 'OPPO_TE_SANITIZED',
+      length: lastSig.length, removed: lastSig.length - sanitized.length,
+      nonAscii: (lastSig.match(/[^\x20-\x7e]/g) || []).slice(0, 8)
+        .map(ch => 'U+' + ch.codePointAt(0).toString(16).toUpperCase())}));
+    if (sanitized !== lastSig && /^\d{8}::[0-9a-f]{64}::\d{10,16}::/.test(sanitized)) {
+      return {'x-euler-const': sanitized, 'x-euler-headers': (lastR && lastR['x-euler-headers']) || ''};
+    }
+    throw failure('OPPO_TE_UNAVAILABLE', stage);
   }
   async function oppoIdentify(a, processToken) {
     // Official secondary verification (identify-engine.js): iframe the engine
@@ -2675,19 +2696,28 @@
     // "identify$$channel_loaded$$", we answer "identify$$message_channel_port_passed$$"
     // with a MessageChannel port; result arrives as {type:'validate_success',ticket}.
     active(a); a.stage = 'oppo_identify';
+    // The shell draws its own QR card above the page and only yields it while the
+    // projected stage matches /captcha|identify/. That projection is pushed on
+    // page mutations, and this widget changes neither the QR image nor the status
+    // text — so without this explicit nudge the card keeps covering the iframe and
+    // the user waits out the full timeout. Same for oppoCaptcha below.
+    page.__JND_UNIFIED_LOGIN?.notify?.();
     const url = OPPO_ID_ORIGIN + '/identify-engine-web?sceneId=' + OPPO_SCENE +
       '&bizAppKey=' + OPPO_BIZ + '&region=CN&processToken=' + encodeURIComponent(processToken);
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#0008;display:flex;align-items:center;justify-content:center';
     const box = document.createElement('div');
-    box.style.cssText = 'background:#fff;border-radius:12px;position:relative;width:400px;height:70vh;max-height:640px;overflow:hidden';
+    box.style.cssText = 'background:#fff;border-radius:12px;position:relative;width:420px;height:78vh;max-height:700px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 12px 40px #0006';
+    const bar = document.createElement('div');
+    bar.textContent = 'OPPO 安全验证 · 请按下方提示完成，完成后自动继续';
+    bar.style.cssText = 'flex:none;height:40px;padding:0 44px 0 14px;font:13px/40px "Microsoft YaHei",sans-serif;color:#333;background:#fafafa;border-bottom:1px solid #eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
     const close = document.createElement('button');
     close.textContent = '×'; close.setAttribute('aria-label', '取消验证');
     close.style.cssText = 'position:absolute;right:6px;top:2px;border:0;background:none;font-size:20px;cursor:pointer;color:#666;z-index:2';
     const frame = document.createElement('iframe');
     frame.src = url;
-    frame.style.cssText = 'border:0;width:100%;height:100%';
-    box.append(close, frame); overlay.append(box);
+    frame.style.cssText = 'border:0;width:100%;flex:1;min-height:0';
+    box.append(bar, close, frame); overlay.append(box);
     document.body.append(overlay);
     let onMsg = null;
     const cleanup = () => { window.removeEventListener('message', onMsg); overlay.remove(); };
@@ -2704,17 +2734,24 @@
             clearTimeout(timer); cleanup(); reject(failure('OPPO_IDENTIFY_CLOSED', 'oppo_identify'));
           }
         };
+        const CH_LOADED = '[MessageChannelDelegator-name]: identify$$channel_loaded$$';
         onMsg = e => {
           // Diagnostic: origin + message shape only, never payload contents.
+          const text = typeof e.data === 'string' ? e.data : '';
           console.info('[统一登录器]', JSON.stringify({stage: 'oppo_identify_msg', origin: e.origin,
-            kind: typeof e.data === 'string' ? 'str:' + e.data.slice(0, 40) : 'obj:' + String(e.data && e.data.type)}));
+            kind: typeof e.data === 'string' ? 'str' : 'obj:' + String(e.data && e.data.type),
+            length: text.length, matched: text === CH_LOADED}));
           if (e.origin !== OPPO_ID_ORIGIN) return;
           if (e.data && e.data.type) { deliver(e.data); return; }
           // Deployed identify-engine-web prefixes the channel name with its
           // delegator tag (ie-index.js vh class, 2026-09-22).
-          if (e.data === '[MessageChannelDelegator-name]: identify$$channel_loaded$$') {
+          if (e.data === CH_LOADED) {
             const channel = new MessageChannel();
-            channel.port1.onmessage = ev => deliver(ev.data);
+            channel.port1.onmessage = ev => {
+              console.info('[统一登录器]', JSON.stringify({stage: 'oppo_identify_port',
+                kind: typeof ev.data === 'string' ? 'str' : 'obj:' + String(ev.data && ev.data.type)}));
+              deliver(ev.data);
+            };
             frame.contentWindow.postMessage('[MessageChannelDelegator-name]: identify$$message_channel_port_passed$$',
               OPPO_ID_ORIGIN, [channel.port2]);
           }
@@ -2724,13 +2761,20 @@
         frame.addEventListener('load', () => { /* fresh page will broadcast again; listener already in place */ });
       });
       return ticket;
-    } finally { cleanup(); }
+    } finally {
+      cleanup();
+      // Hand the shell's QR card back; 'oppo_verify_done' deliberately does not
+      // match /captcha|identify/ so the projection stops yielding.
+      a.stage = 'oppo_verify_done';
+      page.__JND_UNIFIED_LOGIN?.notify?.();
+    }
   }
   async function oppoCaptcha(a) {
     // Server demanded human verification (check code 101001). Show the
     // official slide widget and return captchaCode in the official wrapped
     // form: JSON {success, provider:'DINGXIANG', result: JSON{ret,ticket}}.
     active(a); a.stage = 'oppo_captcha';
+    page.__JND_UNIFIED_LOGIN?.notify?.();
     if (!page._dx?.Captcha) {
       await new Promise((resolve, reject) => {
         const tag = document.createElement('script');
@@ -2776,7 +2820,11 @@
       assert(ticket !== undefined && String(ticket).length <= 4096, 'OPPO_CAPTCHA_SCHEMA_CHANGED', 'oppo_captcha');
       return JSON.stringify({success: true, provider: 'DINGXIANG',
         result: JSON.stringify({ret: 0, ticket})});
-    } finally { overlay.remove(); }
+    } finally {
+      overlay.remove();
+      a.stage = 'oppo_verify_done';
+      page.__JND_UNIFIED_LOGIN?.notify?.();
+    }
   }
   function oppoConfirmURL(qid) {
     return 'https://muc.heytap.com/account-auth/qrcode-login/index.html?isTranslucentBar=false' +
@@ -3539,6 +3587,8 @@
       const ERROR_TEXT = {
         LOGIN_CANCELLED: '已取消', OTHER_TAB_ACTIVE: '另一个窗口正在登录，请先完成或关闭它',
         QR_EXPIRED: '二维码已过期，请重新发起', REQUEST_TIMEOUT: '连接超时，请重试', NETWORK_ERROR: '网络连接失败，请重试',
+        OPPO_TE_UNAVAILABLE: '登录环境校验失败，请重试',
+        OPPO_IDENTIFY_TIMEOUT: '安全验证超时，请重试', OPPO_IDENTIFY_CLOSED: '已取消安全验证',
         ACCOUNT_MISMATCH: '扫码账号与当前账号不一致', WEB_LOCKS_UNAVAILABLE: '当前环境不支持扫码登录',
       };
       const humanError = code => {
@@ -3589,6 +3639,9 @@
       observer.observe(output, {childList: true, characterData: true, subtree: true});
       page.__JND_UNIFIED_LOGIN = Object.freeze({
         version: VERSION,
+        // In-page widgets (OPPO captcha / identify) live under the shell's QR card
+        // and must be able to force a projection update on their own.
+        notify,
         providers: Object.freeze(['qq', 'wx', 'steam', 'oppo', 'vivo', 'huawei', 'honor', 'xiaomi', 'bilibili']),
         start(provider) { microError = null; const p = start(provider); notify(); return Promise.resolve(p).finally(notify); },
         cancel() { microError = null; restoreMiddle(); clearAttempt(); ui.output.textContent = ''; notify(); },
