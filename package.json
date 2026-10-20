@@ -1,0 +1,55 @@
+{
+  "name": "jinnangdai-weiduan",
+  "version": "0.1.0",
+  "description": "新三国杀微端（Electron 薄壳，载官服游戏页 + 注入锦囊袋/小抄）",
+  "main": "main.js",
+  "bin": "attach.js",
+  "scripts": {
+    "attach": "node attach.js",
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "pack:wegame": "pkg . --output \"dist-wegame/新三国杀WeGame微端.exe\" && rcedit \"dist-wegame/新三国杀WeGame微端.exe\" --set-icon build/icon.ico --set-version-string ProductName 新三国杀微端 --set-version-string FileDescription 新三国杀微端",
+    "build:ts": "node scripts/build-ts.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "watch:ts": "node scripts/build-ts.js --watch"
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^0.33.3",
+    "jsqr": "^1.4.0",
+    "qrcode-generator": "^1.4.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "electron": "^33.3.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "pkg": "^5.8.1",
+    "rcedit": "^4.0.1",
+    "typescript": "^5.9.3"
+  },
+  "pkg": {
+    "assets": [
+      "payload/**/*"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ]
+  },
+  "build": {
+    "appId": "com.anque.jinnangdai",
+    "productName": "新三国杀微端",
+    "files": [
+      "main.js",
+      "preload.js",
+      "payload/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

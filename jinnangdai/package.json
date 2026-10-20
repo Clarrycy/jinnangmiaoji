@@ -1,0 +1,15 @@
+{
+  "name": "jinnangdai_launcher",
+  "version": "26.0.21",
+  "productName": "锦囊妙计",
+  "description": "三国杀一将成名锦囊妙计统一微端",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack:portable-win": "node ../scripts/build-portable.js jinnangdai"
+  },
+  "devDependencies": {
+    "electron": "^33.3.0",
+    "electron-packager": "^17.1.2"
+  }
+}
