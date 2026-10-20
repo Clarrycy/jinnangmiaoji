@@ -1,42 +1,70 @@
-# 锦囊妙计客户端
+# 锦囊妙计 — 三国杀一将成名桌面客户端
 
-《三国杀一将成名》网页版的桌面客户端（Electron 壳）。这里是壳本体的源码：标签栏、账号容器、登录桥、账号簿、更新、打包脚本和界面 harness。
+![License](https://img.shields.io/github/license/Clarrycy/jinnangmiaoji) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)
 
-本仓库**不含**随包的游戏辅助脚本（锦囊袋 runtime、小抄）。从源码构建的客户端在首次启动时会从更新清单下载它们，再进入登录页；没有网络时会明确报错，不会带着空 runtime 启动。随包的统一登录器种子在 `jinnangdai/payload/`。
+一个窗口里开多个账号，每个标签一个隔离容器；官服和各渠道的入口、WeGame／Steam／哔哩哔哩等扫码登录都在标签上选；记住密码，重启恢复，后台更新。
+
+![锦囊妙计：标签上的服名菜单，入口与扫码方式都在这里选](docs/screenshot.png)
+
+## 快速开始
+
+玩家：到 Releases 下载安装包（整理中）。
+
+开发者（5 分钟）：
+
+1. 安装依赖
+   ```bash
+   git clone https://github.com/Clarrycy/jinnangmiaoji.git && cd jinnangmiaoji && npm install
+   ```
+2. 编译并运行
+   ```bash
+   node scripts/build-ts.js && npx electron jinnangdai
+   ```
+3. 跑测试
+   ```bash
+   for t in tests/*.test.js; do node "$t"; done
+   ```
+
+## 安装
+
+- 系统：Windows 10 及以上，macOS 11 及以上（Apple 芯片）
+- 从源码运行需要 Node.js 18 及以上
+- 打包：`JND_MICRO_SEEDLESS=1 node scripts/build-portable.js jinnangdai`；macOS 加 `JND_MICRO_MAC=1` 出 DMG；Windows 安装包 `node scripts/build-setup.js jinnangdai <输出目录>`（需要 makensis）
+
+## 使用
+
+| 要做的事 | 操作 |
+|---|---|
+| 再开一个账号 | 标签条右侧 `+`，或 Ctrl+T |
+| 换入口／扫码登录 | 点标签上的服名 |
+| 找回关掉的账号 | 标签条左侧 ▾ 的「最近关闭」 |
+| 管理保存的账号 | 右上角 ≡ → 账号，或登录页账号框下拉里的「管理账号」 |
+| 检查更新 | 右上角 ≡ → 更新 |
+
+## 示例
+
+用独立的数据目录跑一个干净实例，不碰正式账号簿：
+
+```bash
+JND_MICRO_PROFILE=dev npx electron jinnangdai
+```
+
+打开调试端口，用 CDP 驱动验证：
+
+```bash
+npx electron jinnangdai --remote-debugging-port=9333
+```
 
 ## 目录
 
-| 路径 | 内容 |
-|---|---|
-| `src/core/` | 主进程与 preload 的 TypeScript 源码（`main-app.ts` 主进程；`chrome/` 标签栏引擎；`injector-preload.ts` 游戏页注入；`gm-request-host.ts` 脚本跨域请求；`*-update-host.ts` 更新） |
-| `src/jinnangdai/` | 渠道配置（`channel.ts`：版本号、入口、更新地址） |
-| `core/`、`jinnangdai/*.js` | `scripts/build-ts.js` 用 esbuild 从 `src/` 转译出的产物，Electron 直接加载。改 `.ts`，不要改这些文件 |
-| `design/` | 标签栏与浮层的 1:1 harness（`shell-harness.html`），设计先在这里定稿再落壳 |
-| `scripts/` | `build-ts.js` 转译；`build-portable.js` 打便携包／mac DMG；`build-setup.js` 打 Windows 安装包 |
-| `tests/` | 可独立运行的单元测试 |
+- `src/core/` 主进程与页面桥接（TypeScript）；`core/` 是编译产物，由 `scripts/build-ts.js` 生成
+- `src/core/chrome/` 标签栏、菜单、对话框引擎，与 `design/shell-harness.html` 共用同一份
+- `scripts/` 编译与打包；`tests/` 单元测试
 
-## 开发
+## 贡献
 
-```bash
-npm install
-node scripts/build-ts.js
-npx electron jinnangdai
-```
-
-- `JND_MICRO_PROFILE=<名字>`：用独立的用户数据目录运行，不碰正式账号簿和设置。
-- `--remote-debugging-port=9333`：开 CDP，配合脚本驱动验证。
-- `JND_MICRO_PAYLOAD_DIR=<目录>`：指定随包种子目录；指到空目录即模拟无种子的首次启动。
-
-类型检查 `npm run typecheck`；测试逐个运行 `node tests/<name>.test.js`。
-
-## 打包
-
-```bash
-JND_MICRO_SEEDLESS=1 node scripts/build-portable.js jinnangdai
-```
-
-macOS 上加 `JND_MICRO_MAC=1` 出 DMG；Windows 安装包用 `node scripts/build-setup.js jinnangdai <输出目录>`（需要 makensis）。`JND_MICRO_SEEDLESS=1` 表示允许没有随包种子。
+issue 与 PR 欢迎。界面改动先在 `design/shell-harness.html` 里看效果再落到壳里。
 
 ## 许可证
 
-Apache License 2.0，见 `LICENSE`。各平台图标（`src/core/chrome/brand-icons.ts`）取自各官方站点，仅用于「用该平台登录」的指示性展示。
+[Apache License 2.0](LICENSE)
