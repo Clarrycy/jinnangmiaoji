@@ -4,7 +4,7 @@
 //   node scripts/build-setup.js <guanfu|4399> <便携输出目录>
 // 按用户安装到 %LOCALAPPDATA%\Programs\<产品名>，不要求管理员；开始菜单＋桌面快捷方式、卸载器、
 // 控制面板卸载项（HKCU）。安装目录可写，壳的 app.asar 自更新就落在这里。
-// 产物：<目录>/<产品名>-Setup-壳<版本>.exe 与 .manifest.json。未签名：首次运行会有 SmartScreen 提示，签名证书到位后在此接签名步骤。
+// 产物：<目录>/<产品名>-Setup-<版本>.exe 与 .manifest.json。未签名：首次运行会有 SmartScreen 提示，签名证书到位后在此接签名步骤。
 const childProcess = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -21,13 +21,13 @@ const names = { jinnangdai: '锦囊妙计', guanfu: '锦囊妙计-官服', '4399
 const appName = names[channel];
 const sourceDirectory = path.join(outputDirectory, `${appName}-win32-x64`);
 if (!fs.existsSync(path.join(sourceDirectory, `${appName}.exe`))) throw new Error(`portable build not found: ${sourceDirectory}`);
-const portableManifest = fs.readdirSync(outputDirectory).find(name => name.startsWith(`${appName}-v`) && name.endsWith('.zip.manifest.json'));
+const portableManifest = fs.readdirSync(outputDirectory).find(name => name.startsWith(`${appName}-`) && name.endsWith('.zip.manifest.json'));
 if (!portableManifest) throw new Error('portable manifest not found; run build-portable.js first');
 const built = JSON.parse(fs.readFileSync(path.join(outputDirectory, portableManifest), 'utf8'));
 const version = String(built.shellVersion);
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`bad shell version: ${version}`);
 const icon = path.join(weiduanRoot, channel, 'build', 'icon.ico');
-const setupPath = path.join(outputDirectory, `${appName}-Setup-壳${version}.exe`);
+const setupPath = path.join(outputDirectory, `${appName}-Setup-${version}.exe`);
 if (fs.existsSync(setupPath)) throw new Error(`Output already exists: ${setupPath}`);
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const q = value => `"${String(value).replace(/"/g, '$\\"')}"`;

@@ -97,7 +97,7 @@ async function packageChannel(channel) {
   const macBuild = process.platform === 'darwin' && process.env.JND_MICRO_MAC === '1';
   const folderName = macBuild ? `${appName}-darwin-arm64` : `${appName}-win32-x64`;
   const targetDirectory = path.join(outputDirectory, folderName);
-  const zipPath = path.join(outputDirectory, `${appName}-v${seedVersion}-壳${packageInfo.version}-${macBuild ? 'mac-arm64' : 'win-x64'}.zip`);
+  const zipPath = path.join(outputDirectory, `${appName}-${packageInfo.version}-${macBuild ? 'mac-arm64' : 'win-x64'}.zip`);
   const manifestPath = `${zipPath}.manifest.json`;
   for (const file of [targetDirectory, zipPath, manifestPath]) {
     if (fs.existsSync(file)) throw new Error(`Output already exists: ${file}; choose a new JND_MICRO_OUTPUT_DIR`);
@@ -266,7 +266,7 @@ end tell`;
     copy(icon, path.join(targetDirectory, 'icon.ico'));
     // 壳自更新的发布单元就是这份 app.asar：单独导出一份给 generate-micro-components.js。
     if (channel !== 'wegame') {
-      copy(path.join(targetDirectory, 'resources', 'app.asar'), path.join(outputDirectory, `${appName}-壳${packageInfo.version}.app.asar`));
+      copy(path.join(targetDirectory, 'resources', 'app.asar'), path.join(outputDirectory, `${appName}-${packageInfo.version}.app.asar`));
     }
     archive(folderName, zipPath);
     const manifest = {
