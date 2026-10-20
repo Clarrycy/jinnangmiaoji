@@ -11742,7 +11742,7 @@ var require_engine = __commonJS({
     var qrcodegen = require_qrcode();
     function mountChrome2(opts) {
       const { S, ICON, SPEC: SPEC2, host } = opts;
-      const ENTRIES = ["官服", "4399", "QQ 大厅", "7K7K", "百度", "360"];
+      const ENTRIES = ["官服", "4399", "飞火", "顺网", "2144", "紫霞", "QQ 大厅", "7K7K", "百度", "360"];
       const PROVIDERS = ["WeGame - QQ", "WeGame - 微信", "bilibili 扫码登录", "Steam 扫码登录", "OPPO 扫码登录", "小米扫码登录", "VIVO 扫码登录", "华为扫码登录", "荣耀扫码登录", "Steam 官方登录（账号密码 / Steam Guard）", "OPPO 官方登录（账号密码 / 短信 / 扫码）", "小米官方登录（账号密码 / 短信）", "VIVO 官方登录（账号密码 / 短信 / 扫码）"];
       const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录（账号密码 / Steam Guard）": "Steam", "OPPO 官方登录（账号密码 / 短信 / 扫码）": "OPPO", "小米官方登录（账号密码 / 短信）": "小米", "VIVO 官方登录（账号密码 / 短信 / 扫码）": "VIVO" };
       const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC2.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;

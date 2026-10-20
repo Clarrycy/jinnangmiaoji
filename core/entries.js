@@ -20,6 +20,34 @@ const ENTRIES = Object.freeze([
     matches: (url) => /(^|\.)(?:4399iw\d*|iwan4399)\.com$/i.test(url.hostname) && /\/yxxsgs(?:\/|$)/i.test(url.pathname) || isOfficial(url)
   }),
   Object.freeze({
+    id: "feihuo",
+    label: "飞火",
+    entry: "https://www.feihuo.com/game/index/slug/xsgs",
+    verified: false,
+    matches: (url) => /(^|\.)feihuo\.com$/i.test(url.hostname) || isOfficial(url)
+  }),
+  Object.freeze({
+    id: "shunwang",
+    label: "顺网",
+    entry: "https://sgs.swjoy.com/",
+    verified: false,
+    matches: (url) => /(^|\.)swjoy\.com$/i.test(url.hostname) || isOfficial(url)
+  }),
+  Object.freeze({
+    id: "2144",
+    label: "2144",
+    entry: "https://web.2144.cn/hlsgs",
+    verified: false,
+    matches: (url) => /(^|\.)2144\.cn$/i.test(url.hostname) || isOfficial(url)
+  }),
+  Object.freeze({
+    id: "zixia",
+    label: "紫霞",
+    entry: "https://game.zixia.com/game-xsgs",
+    verified: false,
+    matches: (url) => /(^|\.)zixia\.com$/i.test(url.hostname) || isOfficial(url)
+  }),
+  Object.freeze({
     id: "qqgame",
     label: "QQ 大厅",
     entry: "https://qqgame.qq.com/webappframe/?appid=10951",
