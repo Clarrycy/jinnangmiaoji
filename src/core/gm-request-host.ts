@@ -163,7 +163,19 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
       binary: input.responseType === 'arraybuffer',
     };
     for (const [key, value] of Object.entries(input.headers || {})) {
-      if (typeof value === 'string' && /^[\w-]+$/.test(key)) request.headers[key] = value;
+      if (typeof value !== 'string' || !/^[\w-]+$/.test(key)) continue;
+      // Node only accepts ISO-8859-1 header values. A value carrying control
+      // bytes or CJK text (the OPPO risk header x-euler-const is produced by a
+      // wasm SDK and occasionally picks up stray bytes) makes client.request()
+      // throw ERR_INVALID_CHAR synchronously — the request never leaves the
+      // process, yet it used to be reported as a network failure. Reject it here
+      // with the offending code points so the log says what actually happened.
+      if (!/^[\t\x20-\x7E\x80-\xFF]*$/.test(value)) {
+        const bad = [...new Set([...value].filter(ch => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
+        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8)
+          .map(ch => 'U+' + ch.codePointAt(0).toString(16).toUpperCase()).join(','));
+      }
+      request.headers[key] = value;
     }
     let url = new URL(String(input.url || ''));
     if (url.protocol !== 'https:') throw new Error(`GM 请求只允许 HTTPS：${url.protocol}`);
