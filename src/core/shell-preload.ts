@@ -9,13 +9,13 @@ import SPEC = require('./chrome/tab-spec');
 window.addEventListener('DOMContentLoaded', () => {
   const init = ipcRenderer.sendSync('jnd-chrome-init') || {};
   const settings = init.settings || { restore: true, confirmClose: true, muteNew: false, manager: true, stats: true };
-  const accounts: any[] = init.accounts || [], plugins: any[] = init.plugins || [], upds: any[] = init.upds || [], closed: any[] = init.closed || [];
+  const accounts: any[] = init.accounts || [], plugins: any[] = init.plugins || [], upds: any[] = init.upds || [], closed: any[] = init.closed || [], stargaze: any = init.stargaze || null;
   const send = (channel: string, ...args: any[]) => { try { ipcRenderer.send(channel, ...args); } catch (_) {} };
   const call = (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args);
   const api = mountChrome({ S: icons.SVG, ICON: document.body.dataset.icon || '', SPEC, host: {
     desk: () => document.body,
     openExternal: url => send('jnd-chrome-open-external', url),
-    data: { settings, accounts, plugins, upds, closed },
+    data: { settings, accounts, plugins, upds, closed, stargaze },
     closed: { forget: c => send('jnd-chrome-closed', { type: 'forget', slot: c.slot }) },
     tabs: {
       open: (t, extra) => send('jnd-chrome-tab', { type: 'open', id: t.id, entry: t.entry, provider: t.provider, slot: extra?.slot, account: extra?.account, adopt: extra?.adopt, restored: extra?.restored }),
@@ -47,6 +47,13 @@ window.addEventListener('DOMContentLoaded', () => {
       pickFile: () => call('jnd-chrome-plugin-pick'),
     },
     updates: { check: u => send('jnd-chrome-update', { type: 'check', name: u.name }), download: u => send('jnd-chrome-update', { type: 'download', name: u.name }), restart: u => send('jnd-chrome-update', { type: 'restart', name: u.name }) },
+    ...(stargaze ? { stargaze: {
+      configure: (patch: any) => call('jnd-stargaze-config', patch),
+      check: () => call('jnd-stargaze-check'),
+      open: (kind: string) => call('jnd-stargaze-open', kind),
+      openFolder: () => call('jnd-stargaze-open-folder'),
+      chooseFolder: () => call('jnd-stargaze-choose-folder'),
+    } } : {}),
     ...(init.feedback ? { feedback: { upload: (note: string) => call('jnd-chrome-feedback', note) } } : {}),
   } });
   // 主进程回推
@@ -56,6 +63,8 @@ window.addEventListener('DOMContentLoaded', () => {
   ipcRenderer.on('jnd-chrome-window-state', (_e, state: any) => api.setWindow(state));
   ipcRenderer.on('jnd-chrome-size', (_e, width: number, height: number) => api.setSize(width, height));
   ipcRenderer.on('jnd-chrome-command', (_e, name: string) => api.command(name));
+  ipcRenderer.on('jnd-chrome-stargaze', (_e, state: any) => api.setData('stargaze', state));
+  ipcRenderer.on('jnd-chrome-stargaze-update', (_e, message: any) => api.stargazeUpdate(message));
   ipcRenderer.on('jnd-chrome-close-request', () => api.requestClose());
   ipcRenderer.on('jnd-chrome-adopt', (_e, info: any) => api.adoptAt(info, Number(info?.x) || 0)); // info.provider＝第三方方式的菜单文案，chip 显示其简称
   /* 扫码卡由引擎画：open／update／close 三个动作；取消与重试回宿主 */

@@ -18,16 +18,36 @@ const accounts = [
 const upds = [
   { name: '客户端', current: 'Zephyr 26.0.0', latest: 'Zephyr 26.0.1', state: 'available', progress: 0, checked: '今天 14:02', restart: true },
   { name: '锦囊妙计', current: '1.7.1', latest: '1.7.1', state: 'latest', progress: 0, checked: '今天 14:02', restart: false }];
+const now = Date.now();
+const stargaze = {
+  schema: 1,
+  settings: { enabled: true, delivery: 'local' as const, intervalMinutes: 5, notify: true },
+  reports: {
+    activity: { title: '观星报告 · 2026-10-17', reportDate: '2026-10-17', configVersion: '6.4.4', summary: '活动周 10-17 ~ 10-23 · 丰度 7/8 · 169 档奖励 · 17 组概率', names: [], digest: '8d0e3d4b2f7a90c1', fingerprint: '8d0e3d4b2f7a', checkedAt: now - 120000, changedAt: now - 3600000, firstSeenAt: now - 86400000, localReady: true, status: 'ok' as const, error: '' },
+    generals: { title: '后台武将观星 · 2026-10-19', reportDate: '2026-10-19', configVersion: '6.4.4', summary: '新增 2 · 变动 0 · 移除 0', names: ['舒劭一号', '舒劭二号'], digest: '4a6c9e12b3d8f501', fingerprint: '4a6c9e12b3d8', checkedAt: now - 120000, changedAt: now - 7200000, firstSeenAt: now - 172800000, localReady: true, status: 'ok' as const, error: '' },
+  },
+  health: { checks: 256, successes: 256, failures: 0, updates: 6, notifications: 6, lastDurationMs: 842, lastBytes: 341911, consecutiveFailures: 0 },
+  lastCheckAt: now - 120000, lastSuccessAt: now - 120000, nextCheckAt: now + 180000, lastError: '', checking: false,
+  directory: 'C:\\Users\\范例\\AppData\\Local\\Programs\\锦囊妙计\\stargaze',
+  sources: { activity: { label: '活动观星', url: 'https://activity.xinghantujian.top/' }, generals: { label: '后台武将观星', url: 'https://generals.xinghantujian.top/' } },
+};
 const LIVE = !new URLSearchParams(location.search).has('noframe'); // 官服标签真实嵌入 web.sanguosha.com；离屏渲染用 ?noframe 关掉
 const ENTRY_URL: Record<string, string> = { '官服': 'https://web.sanguosha.com/login/x/index' };
 const api = mountChrome({ S: icons.SVG, ICON, SPEC, host: {
   desk: () => document.getElementById('desk') as HTMLElement,
   openExternal: url => { window.open(url, '_blank', 'noopener'); },
   liveUrl: entry => (LIVE ? ENTRY_URL[entry] : undefined),
-  data: { settings, accounts: accounts as any, plugins: plugins as any, upds: upds as any, closed: closed as any },
+  data: { settings, accounts: accounts as any, plugins: plugins as any, upds: upds as any, closed: closed as any, stargaze },
   feedback: { upload: async () => ({ id: Math.random().toString(36).slice(2, 6).toUpperCase() }) }, // harness：假上传，只为了反馈行在
+  stargaze: {
+    configure: async patch => { Object.assign(stargaze.settings, patch); return stargaze as any; },
+    check: async () => ({ ok: true, state: stargaze as any, updates: [] }),
+    open: async () => true,
+    openFolder: async () => true,
+    chooseFolder: async () => stargaze as any,
+  },
 } });
 // 离屏探针与控制台直接用这些全局
-Object.assign(window as any, api, { settings, accounts, plugins, upds, closedTabs: closed }); // window.closed 是只读属性，不能用这个名
+Object.assign(window as any, api, { settings, accounts, plugins, upds, closedTabs: closed, stargaze }); // window.closed 是只读属性，不能用这个名
 api.makeWin([api.makeTab({ entry: '官服', nick: '范例玩家甲', audible: true, hist: [1, 0] }), api.makeTab({ entry: '4399', nick: '小号二' }), api.makeTab({ entry: '官服', hist: [2, 0] })]);
 api.renderAll();

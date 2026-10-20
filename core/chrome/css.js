@@ -100,6 +100,67 @@ function chromeCss(TOKENS, SPEC) {
     .caption span.more .dot[hidden], .amenu .item .dot2[hidden] { display: none; }
     .amenu .item .dot2 { width: 6px; height: 6px; flex: none; border-radius: 50%; background: ${TOKENS.accent}; margin-right: 2px; }
     .amenu .sep { border-top: 1px solid ${TOKENS.line}; margin: 4px 8px; }
+    /* 状态栏观星：勾选框是标题栏的常驻控制，状态点与面板按钮都可直接点开 */
+    .caption .sgbar { display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px; margin: 4px 1px 4px 4px; border-radius: 4px; color: ${TOKENS.ink2}; cursor: pointer; user-select: none; -webkit-app-region: no-drag; }
+    .caption .sgbar:hover { background: rgba(0,0,0,.06); }
+    .caption .sgbar:active { background: rgba(0,0,0,.1); }
+    .sgin { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .sgbox { position: relative; flex: none; width: 13px; height: 13px; border: 1px solid #b6b6bc; border-radius: 3px; background: #fff; display: grid; place-items: center; transition: background-color .12s ease, border-color .12s ease; }
+    .sgin:checked + .sgbox { background: ${TOKENS.ink}; border-color: ${TOKENS.ink}; }
+    .sgin:checked + .sgbox::after { content: ""; width: 4px; height: 7px; margin-top: -1px; border-right: 1.5px solid #fff; border-bottom: 1.5px solid #fff; transform: rotate(45deg); }
+    .sgin:focus-visible + .sgbox { outline: 2px solid ${TOKENS.ink}; outline-offset: 2px; }
+    .sgtext { font: 500 11.5px/1 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif; }
+    .sgbar.on .sgtext { color: ${TOKENS.ink}; }
+    .sgdot { flex: none; width: 6px; height: 6px; margin-left: 1px; border-radius: 50%; background: #b6b6bc; transition: background-color .15s ease; }
+    .sgbar.on .sgdot { background: ${TOKENS.ok}; }
+    .sgbar.error .sgdot { background: ${TOKENS.danger}; }
+    .sgbar.checking .sgdot { animation: sgpulse 1s ease-in-out infinite; }
+    @keyframes sgpulse { 50% { opacity: .3; transform: scale(.75); } }
+    .sgopen { position: relative; width: 24px; height: 24px; margin: 4px 1px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: ${TOKENS.ink2}; display: grid; place-items: center; cursor: pointer; -webkit-app-region: no-drag; }
+    .sgopen:hover { background: rgba(0,0,0,.06); color: ${TOKENS.ink}; } .sgopen:active { background: rgba(0,0,0,.1); }
+    .sgopen svg { width: 14px; height: 14px; stroke-width: 1.4; }
+    .sgopen.new::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: ${TOKENS.accent}; box-shadow: 0 0 0 2px var(--frame); }
+    .sgpanel { position: absolute; top: ${BAR + 4}px; right: 8px; z-index: 7; width: 448px; max-width: calc(100% - 16px); max-height: calc(100% - ${BAR + 12}px); overflow: auto; box-sizing: border-box; padding: 14px 14px 12px; border-radius: 12px; background: #fff; color: ${TOKENS.ink}; box-shadow: 0 18px 48px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.07); font: 13px/1.5 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif; user-select: none; scrollbar-gutter: stable; }
+    .sgpanel[hidden] { display: none; }
+    .sgpanel::-webkit-scrollbar { width: 8px; } .sgpanel::-webkit-scrollbar-thumb { background: #d1d1d5; border: 2px solid #fff; border-radius: 4px; }
+    .sghd { display: flex; align-items: flex-start; gap: 12px; }
+    .sghdt { flex: 1; min-width: 0; } .sgh1line { display: flex; align-items: center; gap: 8px; } .sgh1 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 650; }
+    .sgsub { margin-top: 3px; color: ${TOKENS.ink2}; font-size: 12px; }
+    .sgbadge { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 10px; background: ${TOKENS.surface3}; color: ${TOKENS.ink2}; font-size: 10.5px; font-weight: 600; line-height: 1; }
+    .sgbadgedot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #b6b6bc; }
+    .sgbadge.on { background: rgba(48,168,84,.12); color: ${TOKENS.ok}; } .sgbadge.on .sgbadgedot { background: ${TOKENS.ok}; }
+    .sgbadge.busy { background: rgba(214,164,44,.14); color: #8a6410; } .sgbadge.busy .sgbadgedot { background: #b78218; animation: sgpulse 1s ease-in-out infinite; }
+    .sgbadge.error { background: rgba(196,43,28,.1); color: ${TOKENS.danger}; } .sgbadge.error .sgbadgedot { background: ${TOKENS.danger}; }
+    .sgbadge.off { background: ${TOKENS.surface3}; color: ${TOKENS.ink3}; }
+    .sgx { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: ${TOKENS.ink2}; display: grid; place-items: center; cursor: pointer; } .sgx:hover { background: rgba(0,0,0,.06); color: ${TOKENS.ink}; } .sgx svg { width: 13px; height: 13px; }
+    .sgmodes { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 7px 9px; border-radius: 8px; background: ${TOKENS.surface2}; }
+    .sgmlabel { flex: none; color: ${TOKENS.ink2}; font-size: 12px; } .sgtabs { display: flex; flex: 1; padding: 2px; border-radius: 6px; background: #ececee; }
+    .sgtab { flex: 1; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: ${TOKENS.ink2}; font: inherit; font-size: 12px; cursor: pointer; } .sgtab.on { background: #fff; color: ${TOKENS.ink}; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+    .sgreports { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+    .sgrep { padding: 9px 11px 8px; border: 1px solid ${TOKENS.line}; border-radius: 8px; background: #fbfbfc; transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease; }
+    .sgrep.interactive { cursor: pointer; } .sgrep.interactive:hover { background: #fff; border-color: rgba(60,60,67,.24); box-shadow: 0 1px 3px rgba(0,0,0,.05); } .sgrep.interactive:focus-visible { outline: 2px solid ${TOKENS.ink}; outline-offset: 1px; } .sgrep.disabled { background: ${TOKENS.surface2}; }
+    .sgreptop { display: flex; align-items: center; gap: 6px; } .sgstate { width: 7px; height: 7px; flex: none; border-radius: 50%; background: ${TOKENS.ok}; } .sgstate.empty { background: #b6b6bc; } .sgstate.error { background: ${TOKENS.danger}; }
+    .sgreplabel { font-weight: 600; } .sgrepwhen { margin-left: auto; color: ${TOKENS.ink3}; font-size: 11.5px; }
+    .sgrepopen { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; color: ${TOKENS.ink2}; font-size: 11.5px; font-weight: 500; white-space: nowrap; } .sgrepopen svg { width: 11px; height: 11px; stroke-width: 1.3; } .sgrep.interactive:hover .sgrepopen { color: ${TOKENS.ink}; } .sgrepopen.off { color: ${TOKENS.ink3}; opacity: .55; }
+    .sgtitle { margin-top: 5px; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sgsummary { margin-top: 2px; color: ${TOKENS.ink2}; font-size: 12px; line-height: 1.45; }
+    .sgmetarow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+    .sgmetaitem { padding: 1px 6px; border-radius: 4px; background: ${TOKENS.surface2}; color: ${TOKENS.ink3}; font: 10.5px/1.55 ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace; }
+    .sgerror { margin-top: 6px; color: ${TOKENS.danger}; font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+    .sgb { height: 28px; padding: 0 12px; border: 1px solid ${TOKENS.line}; border-radius: 6px; background: #fff; color: ${TOKENS.ink}; font: inherit; font-size: 12px; cursor: pointer; } .sgb:hover { background: ${TOKENS.surface2}; } .sgb:disabled { opacity: .45; cursor: default; }
+    .sgb.primary { background: ${TOKENS.ink}; border-color: ${TOKENS.ink}; color: #fff; } .sgb.primary:hover { background: #3a3a40; } .sgb.primary:disabled { background: ${TOKENS.ink3}; border-color: ${TOKENS.ink3}; }
+    .sghealth { margin-top: 9px; padding: 8px 10px 7px; border-radius: 9px; background: ${TOKENS.surface2}; }
+    .sghealthhead { display: flex; align-items: baseline; gap: 10px; } .sghealthtitle { margin: 0; font-size: 12px; font-weight: 600; } .sghealthhint { margin-left: auto; color: ${TOKENS.ink3}; font-size: 10.5px; }
+    .sggrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px 10px; margin-top: 7px; }
+    .sgmetric { min-width: 0; } .sgmv { color: ${TOKENS.ink}; font-size: 13px; font-weight: 600; line-height: 1.25; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sgmk { margin-top: 1px; color: ${TOKENS.ink3}; font-size: 10.5px; line-height: 1.3; }
+    .sghealthfoot { display: flex; gap: 12px; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(60,60,67,.09); } .sgpip { color: ${TOKENS.ink3}; font-size: 10.5px; }
+    .sgdirbox { display: flex; align-items: center; gap: 8px; margin-top: 9px; padding: 7px 9px; border: 1px solid ${TOKENS.line}; border-radius: 8px; }
+    .sgdirinfo { flex: 1; min-width: 0; } .sgdirlabel { color: ${TOKENS.ink3}; font-size: 10.5px; } .sgdirpath { margin-top: 1px; color: ${TOKENS.ink2}; font: 10.5px/1.4 ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sgfoot { display: flex; gap: 8px; margin-top: 8px; } .sgfoot .sgb { flex: 1; }
+    .sgfootnote { margin-top: 7px; color: ${TOKENS.ink3}; font-size: 10.5px; line-height: 1.4; }
+    @media (max-height: 690px) { .sgpanel { padding: 12px 12px 10px; } .sgmodes { margin-top: 8px; } .sgreports { gap: 6px; } .sghealth { margin-top: 8px; } .sgfootnote { display: none; } }
+    .pg .dircontrol { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .pg .dircontrol .path { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: ${TOKENS.ink2}; font: 11px/1.4 ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace; }
     .ver { -webkit-app-region: no-drag; height: 20px; padding: 0 9px; border-radius: 4px; border: 1px solid var(--line); background: #fff; color: var(--ink-2); display: inline-flex; align-items: center; font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
     .ver:hover { background: #e9e9ec; color: var(--ink); }
     #desk { position: relative; width: 1280px; height: 720px; }

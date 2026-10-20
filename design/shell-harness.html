@@ -123,6 +123,67 @@
     .caption span.more .dot[hidden], .amenu .item .dot2[hidden] { display: none; }
     .amenu .item .dot2 { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #0067c0; margin-right: 2px; }
     .amenu .sep { border-top: 1px solid #e1e1e3; margin: 4px 8px; }
+    /* 状态栏观星：勾选框是标题栏的常驻控制，状态点与面板按钮都可直接点开 */
+    .caption .sgbar { display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px; margin: 4px 1px 4px 4px; border-radius: 4px; color: #5c5c63; cursor: pointer; user-select: none; -webkit-app-region: no-drag; }
+    .caption .sgbar:hover { background: rgba(0,0,0,.06); }
+    .caption .sgbar:active { background: rgba(0,0,0,.1); }
+    .sgin { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .sgbox { position: relative; flex: none; width: 13px; height: 13px; border: 1px solid #b6b6bc; border-radius: 3px; background: #fff; display: grid; place-items: center; transition: background-color .12s ease, border-color .12s ease; }
+    .sgin:checked + .sgbox { background: #1b1b1f; border-color: #1b1b1f; }
+    .sgin:checked + .sgbox::after { content: ""; width: 4px; height: 7px; margin-top: -1px; border-right: 1.5px solid #fff; border-bottom: 1.5px solid #fff; transform: rotate(45deg); }
+    .sgin:focus-visible + .sgbox { outline: 2px solid #1b1b1f; outline-offset: 2px; }
+    .sgtext { font: 500 11.5px/1 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif; }
+    .sgbar.on .sgtext { color: #1b1b1f; }
+    .sgdot { flex: none; width: 6px; height: 6px; margin-left: 1px; border-radius: 50%; background: #b6b6bc; transition: background-color .15s ease; }
+    .sgbar.on .sgdot { background: #1a7f37; }
+    .sgbar.error .sgdot { background: #c42b1c; }
+    .sgbar.checking .sgdot { animation: sgpulse 1s ease-in-out infinite; }
+    @keyframes sgpulse { 50% { opacity: .3; transform: scale(.75); } }
+    .sgopen { position: relative; width: 24px; height: 24px; margin: 4px 1px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #5c5c63; display: grid; place-items: center; cursor: pointer; -webkit-app-region: no-drag; }
+    .sgopen:hover { background: rgba(0,0,0,.06); color: #1b1b1f; } .sgopen:active { background: rgba(0,0,0,.1); }
+    .sgopen svg { width: 14px; height: 14px; stroke-width: 1.4; }
+    .sgopen.new::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: #0067c0; box-shadow: 0 0 0 2px var(--frame); }
+    .sgpanel { position: absolute; top: 36px; right: 8px; z-index: 7; width: 448px; max-width: calc(100% - 16px); max-height: calc(100% - 44px); overflow: auto; box-sizing: border-box; padding: 14px 14px 12px; border-radius: 12px; background: #fff; color: #1b1b1f; box-shadow: 0 18px 48px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.07); font: 13px/1.5 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif; user-select: none; scrollbar-gutter: stable; }
+    .sgpanel[hidden] { display: none; }
+    .sgpanel::-webkit-scrollbar { width: 8px; } .sgpanel::-webkit-scrollbar-thumb { background: #d1d1d5; border: 2px solid #fff; border-radius: 4px; }
+    .sghd { display: flex; align-items: flex-start; gap: 12px; }
+    .sghdt { flex: 1; min-width: 0; } .sgh1line { display: flex; align-items: center; gap: 8px; } .sgh1 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 650; }
+    .sgsub { margin-top: 3px; color: #5c5c63; font-size: 12px; }
+    .sgbadge { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 10px; background: #e9e9ec; color: #5c5c63; font-size: 10.5px; font-weight: 600; line-height: 1; }
+    .sgbadgedot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #b6b6bc; }
+    .sgbadge.on { background: rgba(48,168,84,.12); color: #1a7f37; } .sgbadge.on .sgbadgedot { background: #1a7f37; }
+    .sgbadge.busy { background: rgba(214,164,44,.14); color: #8a6410; } .sgbadge.busy .sgbadgedot { background: #b78218; animation: sgpulse 1s ease-in-out infinite; }
+    .sgbadge.error { background: rgba(196,43,28,.1); color: #c42b1c; } .sgbadge.error .sgbadgedot { background: #c42b1c; }
+    .sgbadge.off { background: #e9e9ec; color: #8e8e95; }
+    .sgx { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #5c5c63; display: grid; place-items: center; cursor: pointer; } .sgx:hover { background: rgba(0,0,0,.06); color: #1b1b1f; } .sgx svg { width: 13px; height: 13px; }
+    .sgmodes { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 7px 9px; border-radius: 8px; background: #f3f3f3; }
+    .sgmlabel { flex: none; color: #5c5c63; font-size: 12px; } .sgtabs { display: flex; flex: 1; padding: 2px; border-radius: 6px; background: #ececee; }
+    .sgtab { flex: 1; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: #5c5c63; font: inherit; font-size: 12px; cursor: pointer; } .sgtab.on { background: #fff; color: #1b1b1f; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+    .sgreports { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+    .sgrep { padding: 9px 11px 8px; border: 1px solid #e1e1e3; border-radius: 8px; background: #fbfbfc; transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease; }
+    .sgrep.interactive { cursor: pointer; } .sgrep.interactive:hover { background: #fff; border-color: rgba(60,60,67,.24); box-shadow: 0 1px 3px rgba(0,0,0,.05); } .sgrep.interactive:focus-visible { outline: 2px solid #1b1b1f; outline-offset: 1px; } .sgrep.disabled { background: #f3f3f3; }
+    .sgreptop { display: flex; align-items: center; gap: 6px; } .sgstate { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #1a7f37; } .sgstate.empty { background: #b6b6bc; } .sgstate.error { background: #c42b1c; }
+    .sgreplabel { font-weight: 600; } .sgrepwhen { margin-left: auto; color: #8e8e95; font-size: 11.5px; }
+    .sgrepopen { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; color: #5c5c63; font-size: 11.5px; font-weight: 500; white-space: nowrap; } .sgrepopen svg { width: 11px; height: 11px; stroke-width: 1.3; } .sgrep.interactive:hover .sgrepopen { color: #1b1b1f; } .sgrepopen.off { color: #8e8e95; opacity: .55; }
+    .sgtitle { margin-top: 5px; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sgsummary { margin-top: 2px; color: #5c5c63; font-size: 12px; line-height: 1.45; }
+    .sgmetarow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+    .sgmetaitem { padding: 1px 6px; border-radius: 4px; background: #f3f3f3; color: #8e8e95; font: 10.5px/1.55 ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace; }
+    .sgerror { margin-top: 6px; color: #c42b1c; font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+    .sgb { height: 28px; padding: 0 12px; border: 1px solid #e1e1e3; border-radius: 6px; background: #fff; color: #1b1b1f; font: inherit; font-size: 12px; cursor: pointer; } .sgb:hover { background: #f3f3f3; } .sgb:disabled { opacity: .45; cursor: default; }
+    .sgb.primary { background: #1b1b1f; border-color: #1b1b1f; color: #fff; } .sgb.primary:hover { background: #3a3a40; } .sgb.primary:disabled { background: #8e8e95; border-color: #8e8e95; }
+    .sghealth { margin-top: 9px; padding: 8px 10px 7px; border-radius: 9px; background: #f3f3f3; }
+    .sghealthhead { display: flex; align-items: baseline; gap: 10px; } .sghealthtitle { margin: 0; font-size: 12px; font-weight: 600; } .sghealthhint { margin-left: auto; color: #8e8e95; font-size: 10.5px; }
+    .sggrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px 10px; margin-top: 7px; }
+    .sgmetric { min-width: 0; } .sgmv { color: #1b1b1f; font-size: 13px; font-weight: 600; line-height: 1.25; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sgmk { margin-top: 1px; color: #8e8e95; font-size: 10.5px; line-height: 1.3; }
+    .sghealthfoot { display: flex; gap: 12px; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(60,60,67,.09); } .sgpip { color: #8e8e95; font-size: 10.5px; }
+    .sgdirbox { display: flex; align-items: center; gap: 8px; margin-top: 9px; padding: 7px 9px; border: 1px solid #e1e1e3; border-radius: 8px; }
+    .sgdirinfo { flex: 1; min-width: 0; } .sgdirlabel { color: #8e8e95; font-size: 10.5px; } .sgdirpath { margin-top: 1px; color: #5c5c63; font: 10.5px/1.4 ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sgfoot { display: flex; gap: 8px; margin-top: 8px; } .sgfoot .sgb { flex: 1; }
+    .sgfootnote { margin-top: 7px; color: #8e8e95; font-size: 10.5px; line-height: 1.4; }
+    @media (max-height: 690px) { .sgpanel { padding: 12px 12px 10px; } .sgmodes { margin-top: 8px; } .sgreports { gap: 6px; } .sghealth { margin-top: 8px; } .sgfootnote { display: none; } }
+    .pg .dircontrol { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .pg .dircontrol .path { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5c5c63; font: 11px/1.4 ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace; }
     .ver { -webkit-app-region: no-drag; height: 20px; padding: 0 9px; border-radius: 4px; border: 1px solid var(--line); background: #fff; color: var(--ink-2); display: inline-flex; align-items: center; font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
     .ver:hover { background: #e9e9ec; color: var(--ink); }
     #desk { position: relative; width: 1280px; height: 720px; }
@@ -299,6 +360,13 @@
     .caption span.hv::before { background: rgba(0,0,0,.06); }
     .caption span.cx.hv { color: #fff; } .caption span.cx.hv::before { background: #c42b1c; } .caption span.cx:active::before { background: #a52318; }
     .amenu .item.hv { background: rgba(0,0,0,.05); }
+    .caption .sgbar.hv { background: rgba(0,0,0,.06); }
+    .sgopen.hv { background: rgba(0,0,0,.06); color: #1b1b1f; } .sgopen:active { background: rgba(0,0,0,.1); }
+    .sgx { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #5c5c63; display: grid; place-items: center; cursor: pointer; } .sgx.hv { background: rgba(0,0,0,.06); color: #1b1b1f; } .sgx svg { width: 13px; height: 13px; }
+    .sgrep.interactive { cursor: pointer; } .sgrep.interactive.hv { background: #fff; border-color: rgba(60,60,67,.24); box-shadow: 0 1px 3px rgba(0,0,0,.05); } .sgrep.interactive:focus-visible { outline: 2px solid #1b1b1f; outline-offset: 1px; } .sgrep.disabled { background: #f3f3f3; }
+    .sgrepopen { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; color: #5c5c63; font-size: 11.5px; font-weight: 500; white-space: nowrap; } .sgrepopen svg { width: 11px; height: 11px; stroke-width: 1.3; } .sgrep.interactive.hv .sgrepopen { color: #1b1b1f; } .sgrepopen.off { color: #8e8e95; opacity: .55; }
+    .sgb { height: 28px; padding: 0 12px; border: 1px solid #e1e1e3; border-radius: 6px; background: #fff; color: #1b1b1f; font: inherit; font-size: 12px; cursor: pointer; } .sgb.hv { background: #f3f3f3; } .sgb:disabled { opacity: .45; cursor: default; }
+    .sgb.primary { background: #1b1b1f; border-color: #1b1b1f; color: #fff; } .sgb.primary.hv { background: #3a3a40; } .sgb.primary:disabled { background: #8e8e95; border-color: #8e8e95; }
     .ver.hv { background: #e9e9ec; color: var(--ink); }
     .menu .item.hv { background: rgba(0,0,0,.05); }
     .menu .item.disabled { color: #8e8e95; } .menu .item.disabled.hv { background: transparent; }
@@ -12061,6 +12129,24 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
       var BRAND_ICON = require_brand_icons();
       var jsQR = require_jsQR();
       var qrcodegen = require_qrcode();
+      function emptyStargazeState() {
+        return {
+          schema: 1,
+          settings: { enabled: false, delivery: "local", intervalMinutes: 5, notify: true },
+          reports: { activity: null, generals: null },
+          health: { checks: 0, successes: 0, failures: 0, updates: 0, notifications: 0, lastDurationMs: 0, lastBytes: 0, consecutiveFailures: 0 },
+          lastCheckAt: 0,
+          lastSuccessAt: 0,
+          nextCheckAt: 0,
+          lastError: "",
+          checking: false,
+          directory: "",
+          sources: {
+            activity: { label: "活动观星", url: "https://activity.xinghantujian.top/" },
+            generals: { label: "后台武将观星", url: "https://generals.xinghantujian.top/" }
+          }
+        };
+      }
       function mountChrome2(opts) {
         const { S, ICON: ICON2, SPEC: SPEC2, host } = opts;
         const ENTRIES = ["官服", "4399", "QQ 大厅", "7K7K", "百度", "360"];
@@ -12069,8 +12155,10 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
         const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC2.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
         const NICKS = ["范例玩家甲", "范例玩家乙", "范例玩家丙", "小号二", "小号三"];
         const settings2 = host.data.settings;
+        const stargaze2 = host.data.stargaze || (host.data.stargaze = emptyStargazeState());
         const q = (root, sel) => root.querySelector(sel);
         let nextTabId = 1, nextWinId = 1;
+        let stargazeUnread = false;
         const wins = [];
         function makeTab(p = {}) {
           return { id: nextTabId++, kind: "game", entry: "官服", provider: null, nick: "", audible: false, muted: false, hist: [0, 0], loading: false, born: false, ...p };
@@ -12197,14 +12285,266 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
         const WIN_HTML = `<header>
   <div class="nav"><button class="ib back" data-tip="后退" data-key="Alt+←">${S.back}</button><button class="ib fwd" data-tip="前进" data-key="Alt+→">${S.fwd}</button><button class="ib reload" data-tip="刷新" data-key="Ctrl+R">${S.reload}</button></div>
   <div class="tabs"><button class="ib tablist" data-tip="所有标签页" data-key="Ctrl+Shift+A">${S.chevDown}</button><div class="clip"><div class="rail"></div></div><button class="ib newtab" data-tip="新标签页" data-key="Ctrl+T">${S.plus}</button></div>
-  <div class="caption"><span class="more" data-tip="菜单" data-key="Alt+F">${S.menu}<span class="dot"></span></span><span class="mn" data-tip="最小化">${S.min}</span><span class="mx" data-tip="最大化">${S.max}</span><span class="cx" data-tip="关闭" data-key="Alt+F4">${S.x}</span></div>
+  <div class="caption"><label class="sgbar" data-tip="启用或停用自动观星"><input class="sgin" type="checkbox" aria-label="启用自动观星"><i class="sgbox"></i><b class="sgtext">观星</b><i class="sgdot"></i></label><button class="sgopen" type="button" data-tip="观星面板" aria-label="打开观星面板">${S.doc}</button><span class="more" data-tip="菜单" data-key="Alt+F">${S.menu}<span class="dot"></span></span><span class="mn" data-tip="最小化">${S.min}</span><span class="mx" data-tip="最大化">${S.max}</span><span class="cx" data-tip="关闭" data-key="Alt+F4">${S.x}</span></div>
 </header>
 <div id="viewport"><div class="game"></div><div class="pg" hidden></div></div>
 <div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div>
-<div class="amenu" hidden><div class="item" data-act="pm"><i>${S.person}</i><span>账号</span><span class="hint">Ctrl+Shift+M</span></div><div class="item" data-act="settings"><i>${S.sliders}</i><span>设置</span><span class="hint">Ctrl+Shift+S</span></div><div class="sep"></div><div class="item" data-act="update"><i>${S.update}</i><span>更新</span><i class="dot2"></i></div><div class="item" data-act="about"><i>${S.info}</i><span>关于</span></div></div>`;
+<div class="amenu" hidden><div class="item" data-act="pm"><i>${S.person}</i><span>账号</span><span class="hint">Ctrl+Shift+M</span></div><div class="item" data-act="settings"><i>${S.sliders}</i><span>设置</span><span class="hint">Ctrl+Shift+S</span></div><div class="sep"></div><div class="item" data-act="update"><i>${S.update}</i><span>更新</span><i class="dot2"></i></div><div class="item" data-act="about"><i>${S.info}</i><span>关于</span></div></div>
+<div class="sgpanel" hidden></div>`;
         const BORN_CLIP = `polygon(0 0, 100% 0, 100% calc(100% - ${SPEC2.radius}px), calc(100% + ${SPEC2.radius}px) calc(100% - ${SPEC2.radius}px), calc(100% + ${SPEC2.radius}px) 100%, -${SPEC2.radius}px 100%, -${SPEC2.radius}px calc(100% - ${SPEC2.radius}px), 0 calc(100% - ${SPEC2.radius}px))`;
         const TAB_GAME = `<i class="pill"></i><span class="sep"></span><img class="fav" src="${ICON2}" draggable="false"><span class="entry" data-tip="切换渠道服"><span class="el"></span>${S.caret}</span><span class="t"></span><span class="snd" hidden></span><span class="x" data-tip="关闭" data-key="Ctrl+W">${S.close}</span>`;
         const tabPageHtml = (t) => `<i class="pill"></i><span class="sep"></span><span class="fav page">${S[PAGE_ICON[t.kind]]}</span><span class="t"></span><span class="x" data-tip="关闭" data-key="Ctrl+W">${S.close}</span>`;
+        function stargazeAgo(ms) {
+          if (!ms) return "尚未检查";
+          const delta = Math.max(0, Date.now() - ms);
+          if (delta < 6e4) return "刚刚";
+          if (delta < 36e5) return `${Math.floor(delta / 6e4)} 分钟前`;
+          if (delta < 864e5) return `${Math.floor(delta / 36e5)} 小时前`;
+          return `${Math.floor(delta / 864e5)} 天前`;
+        }
+        function stargazeNext(ms) {
+          if (!ms) return "未安排";
+          const delta = ms - Date.now();
+          if (delta <= 0) return "即将检查";
+          if (delta < 6e4) return "不到 1 分钟后";
+          return `${Math.ceil(delta / 6e4)} 分钟后`;
+        }
+        function stargazeBytes(bytes) {
+          const value = Math.max(0, Number(bytes) || 0);
+          if (value < 1024) return `${value} B`;
+          if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+          return `${(value / 1024 / 1024).toFixed(1)} MB`;
+        }
+        function applyStargaze(patch) {
+          if (!host.stargaze) {
+            renderAll();
+            toast("观星宿主尚未就绪，请重启微端后重试");
+            return;
+          }
+          Object.assign(stargaze2.settings, patch);
+          renderAll();
+          const request = host.stargaze.configure(patch);
+          request.then((state) => {
+            if (state) setData("stargaze", state);
+            renderAll();
+            if (patch.enabled === true) toast("已启用自动观星，正在检查云端报告", void 0, 2600);
+            else if (patch.enabled === false) toast("已停用自动观星", void 0, 1800);
+          }, (error) => {
+            renderAll();
+            toast(`观星设置失败：${error?.message || error}`);
+          });
+        }
+        function renderStargazeBar(w) {
+          const el = winEl(w), bar = q(el, ".sgbar");
+          if (!bar) return;
+          const enabled = stargaze2.settings.enabled;
+          const failed = enabled && Boolean(stargaze2.lastError);
+          q(el, ".sgin").checked = enabled;
+          bar.classList.toggle("on", enabled);
+          bar.classList.toggle("checking", Boolean(stargaze2.checking));
+          bar.classList.toggle("error", failed);
+          bar.dataset.tip = !enabled ? "启用自动观星" : stargaze2.checking ? "正在检查观星报告" : failed ? "观星检查异常，点击查看" : `自动观星运行中 · 每 ${stargaze2.settings.intervalMinutes} 分钟检查`;
+          const open = q(el, ".sgopen");
+          open.classList.toggle("new", stargazeUnread);
+          open.dataset.tip = stargazeUnread ? "观星报告有更新" : "观星面板";
+          const panel = q(el, ".sgpanel");
+          if (panel && !panel.hidden) renderStargazePanel(w);
+        }
+        function openStargaze(kind) {
+          if (!host.stargaze) {
+            toast("此环境没有观星宿主能力");
+            return;
+          }
+          stargazeUnread = false;
+          for (const w of wins) renderStargazeBar(w);
+          host.stargaze.open(kind).then(() => closeAll(), (error) => toast(`打开报告失败：${error?.message || error}`));
+        }
+        function chooseStargazeFolder() {
+          if (!host.stargaze) {
+            toast("此环境没有观星宿主能力");
+            return;
+          }
+          host.stargaze.chooseFolder().then((state) => {
+            if (!state) return;
+            setData("stargaze", state);
+            toast("观星报告保存目录已更新", { label: "打开目录", onClick: () => host.stargaze?.openFolder().catch((error) => toast(`打开目录失败：${error?.message || error}`)) }, 5e3);
+          }, (error) => toast(`更改保存目录失败：${error?.message || error}`));
+        }
+        function renderStargazePanel(w) {
+          const panel = q(winEl(w), ".sgpanel");
+          if (!panel) return;
+          panel.textContent = "";
+          const make = (className, tag = "div") => {
+            const node = document.createElement(tag);
+            node.className = className;
+            return node;
+          };
+          const write = (className, value, tag = "div") => {
+            const node = make(className, tag);
+            node.textContent = value;
+            return node;
+          };
+          const enabled = stargaze2.settings.enabled;
+          const failed = enabled && Boolean(stargaze2.lastError);
+          const statusText = stargaze2.checking ? "检查中" : !enabled ? "已停用" : failed ? "检查异常" : "运行中";
+          const statusClass = stargaze2.checking ? "busy" : !enabled ? "off" : failed ? "error" : "on";
+          const head = make("sghd");
+          const heading = make("sghdt");
+          const titleLine = make("sgh1line");
+          titleLine.append(write("sgh1", "观星", "h3"));
+          const badge = make(`sgbadge ${statusClass}`);
+          badge.append(make("sgbadgedot"), write("sgbadgetext", statusText));
+          titleLine.append(badge);
+          heading.append(titleLine);
+          const subtitle = !enabled ? "勾选状态栏“观星”即可启用自动检查" : stargaze2.checking ? "正在检查活动与后台武将报告…" : `每 ${stargaze2.settings.intervalMinutes} 分钟检查一次 · 最近 ${stargazeAgo(stargaze2.lastCheckAt)}`;
+          heading.append(write("sgsub", subtitle));
+          const close = make("sgx", "button");
+          close.type = "button";
+          close.innerHTML = S.close;
+          close.dataset.tip = "关闭";
+          close.onclick = () => closeAll();
+          head.append(heading, close);
+          panel.append(head);
+          const modes = make("sgmodes");
+          modes.append(write("sgmlabel", "接收方式"));
+          const tabs = make("sgtabs");
+          for (const item of [{ key: "local", label: "本地保存" }, { key: "online", label: "在线查阅" }]) {
+            const tab = make("sgtab" + (stargaze2.settings.delivery === item.key ? " on" : ""), "button");
+            tab.type = "button";
+            tab.textContent = item.label;
+            tab.onclick = () => applyStargaze({ delivery: item.key });
+            tabs.append(tab);
+          }
+          modes.append(tabs);
+          panel.append(modes);
+          const reports = make("sgreports");
+          for (const kind of ["activity", "generals"]) {
+            const report = stargaze2.reports[kind];
+            const source = stargaze2.sources[kind];
+            const online = stargaze2.settings.delivery === "online";
+            const canOpen = online || Boolean(report?.localReady);
+            const actionLabel = online ? "在线查阅" : "打开";
+            const card = make("sgrep" + (canOpen ? " interactive" : " disabled"));
+            if (canOpen) {
+              card.tabIndex = 0;
+              card.setAttribute("role", "button");
+              card.setAttribute("aria-label", `${source.label}：${actionLabel}${online ? "在线报告" : "本地报告"}`);
+              const activate = () => openStargaze(kind);
+              card.onclick = activate;
+              card.onkeydown = (event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                activate();
+              };
+            }
+            const top = make("sgreptop");
+            const dot = make("sgstate " + (!report ? "empty" : report.status === "error" ? "error" : "ok"));
+            const action = make("sgrepopen" + (canOpen ? "" : " off"));
+            action.innerHTML = `${actionLabel}${S.arrowUpRight}`;
+            top.append(dot, write("sgreplabel", source.label), write("sgrepwhen", report ? stargazeAgo(report.checkedAt) : "尚未同步"), action);
+            card.append(top);
+            card.append(write("sgtitle", report?.title || (enabled ? "等待首次检查" : "启用后开始检查")));
+            card.append(write("sgsummary", report?.summary || "云端 Config 签名变化后会生成新报告，并在检查时提醒。"));
+            if (report) {
+              const metaRow = make("sgmetarow");
+              for (const value of [report.reportDate || "", report.configVersion ? `v${report.configVersion}` : "", report.fingerprint ? `#${report.fingerprint}` : ""].filter(Boolean)) metaRow.append(write("sgmetaitem", value));
+              if (metaRow.childElementCount) card.append(metaRow);
+              if (report.status === "error" && report.error) card.append(write("sgerror", report.error));
+            }
+            reports.append(card);
+          }
+          panel.append(reports);
+          const health = make("sghealth");
+          const healthHead = make("sghealthhead");
+          healthHead.append(write("sghealthtitle", "运行状态", "h4"), write("sghealthhint", stargaze2.checking ? "正在检查" : `最近检查 ${stargazeAgo(stargaze2.lastCheckAt)}`));
+          health.append(healthHead);
+          const grid = make("sggrid");
+          const metrics = [
+            ["检查", String(stargaze2.health.checks)],
+            ["成功", String(stargaze2.health.successes)],
+            ["失败", String(stargaze2.health.failures)],
+            ["更新", String(stargaze2.health.updates)],
+            ["上次成功", stargazeAgo(stargaze2.lastSuccessAt)],
+            ["下次检查", stargazeNext(stargaze2.nextCheckAt)],
+            ["耗时", `${stargaze2.health.lastDurationMs} ms`],
+            ["本次流量", stargazeBytes(stargaze2.health.lastBytes)]
+          ];
+          for (const [label, value] of metrics) {
+            const cell2 = make("sgmetric");
+            cell2.append(write("sgmv", value), write("sgmk", label));
+            grid.append(cell2);
+          }
+          health.append(grid);
+          const healthFoot = make("sghealthfoot");
+          healthFoot.append(write("sgpip", `提醒 ${stargaze2.health.notifications}`), write("sgpip", `连续失败 ${stargaze2.health.consecutiveFailures}`));
+          health.append(healthFoot);
+          if (stargaze2.lastError) health.append(write("sgerror", stargaze2.lastError));
+          panel.append(health);
+          const dirBox = make("sgdirbox");
+          const dirInfo = make("sgdirinfo");
+          dirInfo.append(write("sgdirlabel", "保存位置"));
+          const dirPath = write("sgdirpath", stargaze2.directory || "尚未创建数据目录");
+          dirPath.title = stargaze2.directory || "";
+          dirInfo.append(dirPath);
+          const change = make("sgb", "button");
+          change.type = "button";
+          change.textContent = "更改";
+          change.disabled = !host.stargaze;
+          change.onclick = chooseStargazeFolder;
+          dirBox.append(dirInfo, change);
+          panel.append(dirBox);
+          const foot = make("sgfoot");
+          const check = make("sgb primary", "button");
+          check.type = "button";
+          check.textContent = stargaze2.checking ? "检查中…" : "立即检查";
+          check.disabled = stargaze2.checking;
+          check.onclick = () => {
+            if (!host.stargaze) return;
+            check.disabled = true;
+            check.textContent = "检查中…";
+            stargaze2.checking = true;
+            renderAll();
+            host.stargaze.check().then((result) => {
+              if (result?.state) setData("stargaze", result.state);
+              renderAll();
+              if (!result) toast("观星检查没有返回结果");
+              else if (result.ok) toast("观星检查完成");
+              else toast(`观星检查未全部成功：${result.state?.lastError || "请稍后重试"}`);
+            }, (error) => {
+              stargaze2.checking = false;
+              renderAll();
+              toast(`观星检查失败：${error?.message || error}`);
+            });
+          };
+          const folder = make("sgb", "button");
+          folder.type = "button";
+          folder.textContent = "打开数据目录";
+          folder.onclick = () => host.stargaze?.openFolder().catch((error) => toast(`打开目录失败：${error?.message || error}`));
+          foot.append(check, folder);
+          panel.append(foot);
+          panel.append(write("sgfootnote", "默认与微端同目录；云端 Config 报告指纹变化时提醒。"));
+        }
+        function stargazeUpdate(message) {
+          const items = Array.isArray(message?.items) ? message.items : [];
+          if (!items.length) return;
+          stargazeUnread = true;
+          renderAll();
+          const single = items.length === 1 ? items[0] : null;
+          const text = single ? `${single.label}报告已更新` : `${items.length} 份观星报告已更新`;
+          const action = single ? message.delivery === "online" ? "在线查阅" : "打开本地报告" : "打开观星面板";
+          toast(text, { label: action, onClick: () => {
+            if (single) {
+              openStargaze(single.kind);
+              return;
+            }
+            const w = wins[0];
+            if (!w) return;
+            stargazeUnread = false;
+            const el = winEl(w);
+            renderStargazeBar(w);
+            q(el, ".sgopen").click();
+          } }, 9e3, "stargaze-update");
+        }
         function winEl(w) {
           let el = document.querySelector(`.win[data-win="${w.id}"]`);
           if (!el) {
@@ -12257,6 +12597,25 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
               e.stopPropagation();
               toggleTabList(w);
             };
+            q(el, ".sgin").onchange = () => applyStargaze({ enabled: q(el, ".sgin").checked });
+            q(el, ".sgopen").onclick = (e) => {
+              e.stopPropagation();
+              const panel = q(el, ".sgpanel");
+              const open = panel.hidden;
+              closeAll();
+              if (open) {
+                stargazeUnread = false;
+                renderStargazeBar(w);
+                renderStargazePanel(w);
+                panel.hidden = false;
+                setCover("sgpanel", true);
+              }
+            };
+            q(el, ".sgpanel").onclick = (e) => e.stopPropagation();
+            el.addEventListener("click", (e) => {
+              const target = e.target;
+              if (!target.closest(".sgpanel,.sgbar") && !q(el, ".sgpanel").hidden) closeAll();
+            });
             q(el, ".tabs").addEventListener("wheel", (e) => {
               const L = layout(w, q(el, ".tabs").clientWidth);
               if (!L.overflow) return;
@@ -12284,7 +12643,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
             q(el, ".caption .mx").onclick = () => host.window?.command("maximize");
             q(el, "header").addEventListener("pointerdown", (e) => {
               const tg = e.target;
-              if (e.button !== 0 || tg.closest(".tab,.ib,.caption span,.menu,.amenu")) return;
+              if (e.button !== 0 || tg.closest(".tab,.ib,.caption span,.sgbar,.sgopen,.menu,.amenu,.sgpanel")) return;
               if (host.window) {
                 if (!host.window.dragStart) return;
                 host.window.dragStart({ x: e.screenX, y: e.screenY });
@@ -12381,6 +12740,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           const hasUpdate = upds2.some((u) => u.state === "available" || u.state === "ready");
           q(el, ".more .dot").hidden = !hasUpdate;
           q(el, ".amenu .dot2").hidden = !hasUpdate;
+          renderStargazeBar(w);
           q(el, ".back").disabled = !t.hist[0];
           q(el, ".fwd").disabled = !t.hist[1];
           q(el, ".reload").innerHTML = t.loading ? S.stop : S.reload;
@@ -12622,10 +12982,11 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           }
         };
         function closeAll() {
-          for (const p of document.querySelectorAll(".menu,.amenu,.tlmenu")) p.hidden = true;
+          for (const p of document.querySelectorAll(".menu,.amenu,.tlmenu,.sgpanel")) p.hidden = true;
           for (const t of document.querySelectorAll(".tab.ctx")) t.classList.remove("ctx");
           document.querySelectorAll(".entry.open,.ib.s.op.open").forEach((x) => x.classList.remove("open"));
           setCover("menu", false);
+          setCover("sgpanel", false);
         }
         function menuItem(label, onClick, extra = {}) {
           const d = document.createElement("div");
@@ -13668,6 +14029,45 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           const out = button("退出所有账号");
           out.onclick = confirmLogoutAll;
           settingRow(s, "退出登录", "将所有已登录的标签页退回到初始登录页。已保存的账号和密码不会删除。", out);
+          s = section(pg, "观星");
+          settingRow(s, "自动观星", "开启后，微端运行期间定时检查星汉图鉴的 Config 观星报告；只有内容真正变化时才提醒。", toggle(stargaze2.settings.enabled, (on) => applyStargaze({ enabled: on }))).dataset.key = "stargaze";
+          const delivery = segmented(["本地保存", "在线查阅"], stargaze2.settings.delivery === "online" ? 1 : 0, (index) => applyStargaze({ delivery: index === 1 ? "online" : "local" }));
+          settingRow(s, "报告接收方式", "本地保存会生成可直接打开的 HTML 快照；在线查阅会打开星汉图鉴的对应报告页。", delivery);
+          const dirControl = document.createElement("div");
+          dirControl.className = "dircontrol";
+          const dirSettingPath = document.createElement("span");
+          dirSettingPath.className = "path";
+          dirSettingPath.textContent = stargaze2.directory || "尚未创建";
+          dirSettingPath.title = stargaze2.directory || "";
+          const chooseDir = button("更改目录");
+          chooseDir.disabled = !host.stargaze;
+          chooseDir.onclick = chooseStargazeFolder;
+          dirControl.append(dirSettingPath, chooseDir);
+          settingRow(s, "报告保存目录", "默认保存在微端所在目录，也可自行选择；切换时当前最新报告会迁移到新位置。", dirControl).dataset.key = "stargaze-dir";
+          const intervalValues = [5, 15, 30, 60];
+          const intervalIndex = Math.max(0, intervalValues.indexOf(stargaze2.settings.intervalMinutes));
+          const interval = segmented(["5 分钟", "15 分钟", "30 分钟", "60 分钟"], intervalIndex, (index) => applyStargaze({ intervalMinutes: intervalValues[index] }));
+          settingRow(s, "检查频率", "检查失败时会自动退避，最长 60 分钟再试；不会在失败时覆盖已有报告。", interval);
+          settingRow(s, "桌面更新提醒", "报告内容更新时发送 Windows 通知；关闭后仍可在顶部观星面板查看新报告。", toggle(stargaze2.settings.notify, (on) => applyStargaze({ notify: on })));
+          const checkNow = button("立即检查");
+          checkNow.onclick = () => {
+            checkNow.disabled = true;
+            if (!host.stargaze) {
+              toast("此环境没有观星宿主能力");
+              checkNow.disabled = false;
+              return;
+            }
+            host.stargaze.check().then((result) => {
+              checkNow.disabled = false;
+              if (result?.state) setData("stargaze", result.state);
+              if (result?.ok) toast("观星检查完成");
+              else toast(`观星检查未全部成功：${result?.state?.lastError || "请稍后重试"}`);
+            }, (error) => {
+              checkNow.disabled = false;
+              toast(`观星检查失败：${error?.message || error}`);
+            });
+          };
+          settingRow(s, "手动检查", "用于安装后立即拉取一次报告，或排查网络与云端报告状态。", checkNow);
           s = section(pg, "问题反馈");
           settingRow(s, "发送匿名使用统计", "包含功能使用次数与崩溃信息，用于改进锦囊妙计，提升游戏稳定性。不包含游戏内敏感信息。", toggle(settings2.stats, bind("stats")));
           if (host.feedback) {
@@ -13932,10 +14332,14 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           render(f.w);
         }
         function setData(kind, next) {
+          if (next === void 0) return;
           const cur = host.data[kind];
-          if (Array.isArray(cur)) cur.splice(0, cur.length, ...next);
-          else Object.assign(cur, next);
-          for (const w of wins) {
+          if (cur === void 0 || cur === null) host.data[kind] = next;
+          else if (Array.isArray(cur) && Array.isArray(next)) cur.splice(0, cur.length, ...next);
+          else if (next && typeof next === "object") Object.assign(cur, next);
+          else host.data[kind] = next;
+          if (kind === "stargaze") renderAll();
+          else for (const w of wins) {
             const t = curTab(w);
             if (t && t.kind !== "game") renderPage(w, t);
           }
@@ -13979,7 +14383,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           openTab(w, makeTab({ entry: info.entry, provider: info.provider || null, nick: info.nick || "", muted: Boolean(info.muted), born: true }), idx, { slot: info.slot, adopt: true });
           render(w);
         }
-        return { wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
+        return { wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt, stargazeUpdate };
       }
       module.exports = mountChrome2;
     }
@@ -14101,6 +14505,23 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
     { name: "客户端", current: "Zephyr 26.0.0", latest: "Zephyr 26.0.1", state: "available", progress: 0, checked: "今天 14:02", restart: true },
     { name: "锦囊妙计", current: "1.7.1", latest: "1.7.1", state: "latest", progress: 0, checked: "今天 14:02", restart: false }
   ];
+  var now = Date.now();
+  var stargaze = {
+    schema: 1,
+    settings: { enabled: true, delivery: "local", intervalMinutes: 5, notify: true },
+    reports: {
+      activity: { title: "观星报告 · 2026-10-17", reportDate: "2026-10-17", configVersion: "6.4.4", summary: "活动周 10-17 ~ 10-23 · 丰度 7/8 · 169 档奖励 · 17 组概率", names: [], digest: "8d0e3d4b2f7a90c1", fingerprint: "8d0e3d4b2f7a", checkedAt: now - 12e4, changedAt: now - 36e5, firstSeenAt: now - 864e5, localReady: true, status: "ok", error: "" },
+      generals: { title: "后台武将观星 · 2026-10-19", reportDate: "2026-10-19", configVersion: "6.4.4", summary: "新增 2 · 变动 0 · 移除 0", names: ["舒劭一号", "舒劭二号"], digest: "4a6c9e12b3d8f501", fingerprint: "4a6c9e12b3d8", checkedAt: now - 12e4, changedAt: now - 72e5, firstSeenAt: now - 1728e5, localReady: true, status: "ok", error: "" }
+    },
+    health: { checks: 256, successes: 256, failures: 0, updates: 6, notifications: 6, lastDurationMs: 842, lastBytes: 341911, consecutiveFailures: 0 },
+    lastCheckAt: now - 12e4,
+    lastSuccessAt: now - 12e4,
+    nextCheckAt: now + 18e4,
+    lastError: "",
+    checking: false,
+    directory: "C:\\Users\\范例\\AppData\\Local\\Programs\\锦囊妙计\\stargaze",
+    sources: { activity: { label: "活动观星", url: "https://activity.xinghantujian.top/" }, generals: { label: "后台武将观星", url: "https://generals.xinghantujian.top/" } }
+  };
   var LIVE = !new URLSearchParams(location.search).has("noframe");
   var ENTRY_URL = { "官服": "https://web.sanguosha.com/login/x/index" };
   var api = mountChrome({ S: icons.SVG, ICON, SPEC, host: {
@@ -14109,11 +14530,21 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
       window.open(url, "_blank", "noopener");
     },
     liveUrl: (entry) => LIVE ? ENTRY_URL[entry] : void 0,
-    data: { settings, accounts, plugins, upds, closed },
-    feedback: { upload: async () => ({ id: Math.random().toString(36).slice(2, 6).toUpperCase() }) }
+    data: { settings, accounts, plugins, upds, closed, stargaze },
+    feedback: { upload: async () => ({ id: Math.random().toString(36).slice(2, 6).toUpperCase() }) },
     // harness：假上传，只为了反馈行在
+    stargaze: {
+      configure: async (patch) => {
+        Object.assign(stargaze.settings, patch);
+        return stargaze;
+      },
+      check: async () => ({ ok: true, state: stargaze, updates: [] }),
+      open: async () => true,
+      openFolder: async () => true,
+      chooseFolder: async () => stargaze
+    }
   } });
-  Object.assign(window, api, { settings, accounts, plugins, upds, closedTabs: closed });
+  Object.assign(window, api, { settings, accounts, plugins, upds, closedTabs: closed, stargaze });
   api.makeWin([api.makeTab({ entry: "官服", nick: "范例玩家甲", audible: true, hist: [1, 0] }), api.makeTab({ entry: "4399", nick: "小号二" }), api.makeTab({ entry: "官服", hist: [2, 0] })]);
   api.renderAll();
 })();

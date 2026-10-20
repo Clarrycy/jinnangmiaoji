@@ -2,3 +2,4 @@ node_modules/
 dist-series/
 *.log
 .DS_Store
+/stargaze/

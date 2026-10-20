@@ -1,6 +1,6 @@
 // 由 src/core/main-app.ts 生成（node scripts/build-ts.js）；改源文件，不要改这里。
 const electron_ = require("electron");
-const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage, screen, shell, net } = electron_;
+const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage, screen, shell, net, Notification } = electron_;
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
@@ -26,6 +26,12 @@ const { TITLE_HEIGHT, FRAME, BAR_COLOR, frameDocument, chromeDocument, viewportB
 const UpdateCore = require("./update-core");
 const popup_window_ = require("./popup-window");
 const { createOverlays } = popup_window_;
+const stargaze_watch_ = require("./stargaze-watch");
+const { createStargazeWatcher } = stargaze_watch_;
+const stargaze_fetch_ = require("./stargaze-fetch");
+const { createReportFetch } = stargaze_fetch_;
+const stargaze_report_ = require("./stargaze-report");
+const { normalizeSettings: normalizeStargazeSettings } = stargaze_report_;
 const configuredSessions = /* @__PURE__ */ new WeakSet();
 const windows = /* @__PURE__ */ new Map();
 const occupiedSlots = /* @__PURE__ */ new Set();
@@ -38,6 +44,8 @@ let gmHost = null;
 let shellUpdateHost = null;
 let credentials = null;
 let pluginStore = null;
+let stargazeWatcher = null;
+const stargazeNotifications = /* @__PURE__ */ new Set();
 const OFFICIAL_LOGIN_PATHS = ["/login/index.html", "/login/x/index"];
 const PROVIDER_CHIP = { qq: "WeGame", wx: "WeGame", bilibili: "哔哩哔哩", steam: "Steam", oppo: "OPPO", xiaomi: "小米", vivo: "VIVO", huawei: "华为", honor: "荣耀" };
 const UI_DEFAULTS = Object.freeze({ restore: true, confirmClose: true, muteNew: false, manager: true, stats: true });
@@ -145,6 +153,28 @@ module.exports = function startMicroClient(config) {
     }
   }
   const uiSettings = () => ({ ...UI_DEFAULTS, ...readSettings().ui || {} });
+  const stargazeSettings = () => normalizeStargazeSettings(readSettings().stargaze || {});
+  const defaultStargazeDirectory = () => path.join(app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, ".."), "stargaze");
+  const storedStargazeDirectory = () => {
+    const saved = String(readSettings().stargaze?.directory || "").trim();
+    return saved && path.isAbsolute(saved) ? path.resolve(saved) : "";
+  };
+  const preferredStargazeDirectory = () => storedStargazeDirectory() || defaultStargazeDirectory();
+  function writeStargazeSettings(patch) {
+    const saved = readSettings();
+    const current = saved.stargaze && typeof saved.stargaze === "object" ? saved.stargaze : {};
+    writeSettings({ stargaze: { ...current, ...patch } });
+  }
+  function prepareStargazeDirectory(target) {
+    const raw = String(target || "").trim();
+    if (!raw) throw new Error("报告保存目录为空");
+    const resolved = path.resolve(raw);
+    fs.mkdirSync(path.join(resolved, "reports"), { recursive: true });
+    const probe = path.join(resolved, `.write-test-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(probe, "ok");
+    fs.unlinkSync(probe);
+    return resolved;
+  }
   function defaultEntryId() {
     const saved = String(readSettings().lastEntry || "");
     if (entryById(saved)) return saved;
@@ -943,6 +973,58 @@ module.exports = function startMicroClient(config) {
     return [client, jnd];
   }
   const pushUpds = () => broadcast("jnd-chrome-data", "upds", updateRows());
+  const stargazeState = () => stargazeWatcher?.getState() || null;
+  async function openStargazeReport(kind) {
+    if (!stargazeWatcher) throw new Error("自动观星尚未启动");
+    if (!["activity", "generals"].includes(String(kind))) throw new Error("未知的观星报告类型");
+    const delivery = stargazeSettings().delivery;
+    if (delivery === "online") {
+      await shell.openExternal(stargazeWatcher.onlineReportUrl(kind));
+      return;
+    }
+    const file = stargazeWatcher.localReportPath(kind);
+    if (!fs.existsSync(file)) throw new Error("本地报告尚未生成，请先检查一次");
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+  }
+  async function openStargazeFolder() {
+    const target = stargazeWatcher?.getState().directory || preferredStargazeDirectory();
+    fs.mkdirSync(target, { recursive: true });
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+  }
+  function notifyStargazeUpdates(updates) {
+    const current = stargazeSettings();
+    for (const update of updates || []) {
+      if (!current.notify || !Notification.isSupported()) continue;
+      try {
+        const notification = new Notification({
+          title: `${update.label}报告已更新`,
+          body: String(update.report?.summary || update.report?.title || "点击查看最新报告")
+        });
+        notification.on("click", () => {
+          void openStargazeReport(update.kind).catch((error) => log("stargaze notification open failed", error?.message || error));
+        });
+        notification.on("close", () => stargazeNotifications.delete(notification));
+        stargazeNotifications.add(notification);
+        notification.show();
+      } catch (error) {
+        log("stargaze notification failed", error?.message || error);
+      }
+    }
+    if (updates?.length) {
+      broadcast("jnd-chrome-stargaze-update", {
+        delivery: current.delivery,
+        items: updates.map((update) => ({
+          kind: update.kind,
+          label: update.label,
+          title: update.report?.title || "",
+          summary: update.report?.summary || "",
+          reportDate: update.report?.reportDate || ""
+        }))
+      });
+    }
+  }
   function pluginRows() {
     const rows = [];
     const removed = new Set(readSettings().removedPlugins || []);
@@ -1236,6 +1318,39 @@ module.exports = function startMicroClient(config) {
       const found = tabOf(event.sender);
       event.returnValue = found?.tab.entryId || defaultEntryId();
     });
+    ipcMain.on("jnd-stargaze-get-sync", (event) => {
+      event.returnValue = stargazeState();
+    });
+    ipcMain.handle("jnd-stargaze-config", async (_event, patch) => {
+      const next = normalizeStargazeSettings({ ...stargazeSettings(), ...patch && typeof patch === "object" ? patch : {} });
+      writeStargazeSettings(next);
+      log("stargaze config", JSON.stringify(next));
+      return stargazeWatcher?.configure(next) || null;
+    });
+    ipcMain.handle("jnd-stargaze-check", async () => await stargazeWatcher?.checkNow() || null);
+    ipcMain.handle("jnd-stargaze-open", async (_event, kind) => {
+      await openStargazeReport(kind);
+      return true;
+    });
+    ipcMain.handle("jnd-stargaze-open-folder", async () => {
+      await openStargazeFolder();
+      return true;
+    });
+    ipcMain.handle("jnd-stargaze-choose-folder", async (event) => {
+      if (!stargazeWatcher) throw new Error("自动观星尚未启动");
+      const record = windowOfChrome(event.sender);
+      const options = {
+        title: "选择观星报告保存目录",
+        defaultPath: stargazeWatcher.getState().directory,
+        properties: ["openDirectory", "createDirectory"]
+      };
+      const picked = record ? await dialog.showOpenDialog(record.win, options) : await dialog.showOpenDialog(options);
+      if (picked.canceled || !picked.filePaths?.[0]) return null;
+      const state = stargazeWatcher.setDirectory(picked.filePaths[0]);
+      writeStargazeSettings({ directory: state.directory });
+      log("stargaze directory", state.directory);
+      return state;
+    });
     ipcMain.on("jnd-chrome-init", (event) => {
       const record = windowOfChrome(event.sender);
       const ui = uiSettings();
@@ -1257,7 +1372,8 @@ module.exports = function startMicroClient(config) {
         maximized: record ? record.win.isMaximized() : false,
         focused: record ? record.win.isFocused() : true,
         feedback: Boolean(channel.feedbackUrl),
-        closed: closedRows()
+        closed: closedRows(),
+        stargaze: stargazeState()
       };
     });
     ipcMain.on("jnd-chrome-ready", (event) => {
@@ -1628,6 +1744,21 @@ module.exports = function startMicroClient(config) {
       })
     });
     gmHost = createGmRequestHost({ log, net });
+    let stargazeDirectory = preferredStargazeDirectory();
+    try {
+      stargazeDirectory = prepareStargazeDirectory(stargazeDirectory);
+    } catch (error) {
+      log("stargaze directory unavailable", stargazeDirectory, error?.message || error);
+      stargazeDirectory = prepareStargazeDirectory(path.join(app.getPath("userData"), "stargaze"));
+    }
+    stargazeWatcher = createStargazeWatcher({
+      directory: stargazeDirectory,
+      settings: stargazeSettings(),
+      fetch: createReportFetch(),
+      log,
+      onState: (state) => broadcast("jnd-chrome-stargaze", state),
+      onUpdate: (updates) => notifyStargazeUpdates(updates)
+    });
     shellUpdateHost = createShellUpdateHost({
       log,
       shellVersion: channel.shellVersion,
@@ -1685,6 +1816,11 @@ module.exports = function startMicroClient(config) {
     app.quit();
   });
   app.on("will-quit", () => {
+    try {
+      stargazeWatcher?.dispose();
+    } catch (error) {
+      log("stargaze dispose failed", error?.message || error);
+    }
     try {
       shellUpdateHost?.applyOnQuit();
     } catch (error) {
