@@ -9,6 +9,27 @@ function isOfficialGamePath(url) {
   return /(^|\.)sanguosha\.com$/i.test(url.hostname) && /\/(?:x|10|10th)\/pc(?:\/|$)/i.test(url.pathname);
 }
 
+// 统一登录器需要同时跟随官方登录页、渠道回调页和游戏页；这里与载荷头部 @match 保持一致。
+function isUnifiedLoginPage(url) {
+  if (url.origin === OFFICIAL_ORIGIN) {
+    const p = url.pathname;
+    return p === '/login/index.html' || p === '/login/x/index'
+      || p === '/x/pc/index.php' || p === '/10/pc/index.php' || p === '/10/pc/bilibiliWD_index.php';
+  }
+  if (url.protocol === 'https:' && url.hostname === 'passport.vivo.com.cn') return true;
+  if (url.protocol === 'https:' && url.hostname === 'joint.vivo.com.cn') {
+    return url.pathname.startsWith('/game-subaccount-login/');
+  }
+  if (url.protocol === 'https:' && url.hostname === 'game-login.heytap.com') {
+    return url.pathname.startsWith('/game-union-h5/h5/client-login/');
+  }
+  if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname === 'game.xiaomi.com') {
+    return url.pathname.startsWith('/oauthcallback/mioauth');
+  }
+  return url.protocol === 'https:' && url.hostname === '10th-ly-login.sanguosha.com'
+    && url.pathname === '/steam/oauth/callback.html';
+}
+
 const COMPONENTS = Object.freeze([
   Object.freeze({
     id: 'daxiaochao',
@@ -28,12 +49,7 @@ const COMPONENTS = Object.freeze([
     // 脚本自带 @noframes，并在非官方源或子 frame 时自行退出；这里按其 @match 收口。
     frame: 'main',
     gm: true,
-    matches(url) {
-      if (url.origin !== OFFICIAL_ORIGIN) return false;
-      const p = url.pathname;
-      return p === '/login/index.html' || p === '/login/x/index'
-        || p === '/10/pc/index.php' || p === '/10/pc/bilibiliWD_index.php';
-    },
+    matches: isUnifiedLoginPage,
   }),
 ]);
 
@@ -51,4 +67,4 @@ function parseUserScriptHeader(code) {
   return { name, version, connect };
 }
 
-export = { COMPONENTS, OFFICIAL_ORIGIN, componentById, isOfficialGamePath, parseUserScriptHeader };
+export = { COMPONENTS, OFFICIAL_ORIGIN, componentById, isOfficialGamePath, isUnifiedLoginPage, parseUserScriptHeader };

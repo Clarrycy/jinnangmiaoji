@@ -7,6 +7,8 @@ const entries_ = require("./entries");
 const { ENTRIES, matchesAnyEntry, TEST_ORIGIN } = entries_;
 const gm_shim_ = require("./gm-shim");
 const { createGmShim, wrapWithGm } = gm_shim_;
+const direct_login_bridge_ = require("./direct-login-bridge");
+const { installDirectEventBridge } = direct_login_bridge_;
 module.exports = function startInjector(config) {
   const channel = String(config?.hostChannel || config?.id || "unknown");
   function report(level, message, extra = {}) {
@@ -57,11 +59,20 @@ module.exports = function startInjector(config) {
     window.__JND_HOST = {
       ...window.__JND_HOST || {},
       kind: "micro",
+      source: "sgs-multichannel",
       shell: "Electron",
       shellVersion: String(config?.shellVersion || ""),
       engine: "Chromium",
       channel: currentHostChannel()
     };
+  }
+  function installDirectEventHost() {
+    installDirectEventBridge({
+      window,
+      storage: window.sessionStorage,
+      send: (name, payload) => ipcRenderer.send(name, payload),
+      report
+    });
   }
   function installUpdateBridge(startupRecord) {
     let lastState = null;
@@ -646,6 +657,7 @@ ${record.code}
   }
   async function injectStartupRuntime() {
     installHostFacts();
+    installDirectEventHost();
     const url = currentUrl();
     if (!url) return false;
     const game = isGameDocument();
@@ -686,7 +698,7 @@ ${record.code}
       }
     }
     if (!game) {
-      if (process.isMainFrame && /^https?:$/.test(url.protocol)) {
+      if (process.isMainFrame && isOfficialLoginPage(url)) {
         try {
           installLandingNetworkGuard();
         } catch (error) {

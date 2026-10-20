@@ -6,6 +6,7 @@ const zlib = require("zlib");
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 2e4;
+const MAX_TIMEOUT_MS = 10 * 60 * 1e3;
 const ALWAYS_ALLOWED = ["sanguosha.com"];
 function hostAllowed(hostname, allowHosts) {
   const host = String(hostname || "").toLowerCase();
@@ -46,10 +47,109 @@ function parseSetCookie(line, url) {
   }
   return cookie;
 }
+function cookieKey(cookie) {
+  return `${String(cookie?.domain || "").replace(/^\./, "")}
+${cookie?.path || "/"}
+${cookie?.name || ""}`;
+}
+function cookieLine(cookie) {
+  const clean = (value) => String(value == null ? "" : value).replace(/[\r\n]/g, "");
+  let line = `${clean(cookie.name)}=${clean(cookie.value)}; Path=${clean(cookie.path || "/")}`;
+  if (cookie.domain && !cookie.hostOnly) line += `; Domain=${clean(cookie.domain)}`;
+  if (cookie.secure) line += "; Secure";
+  if (cookie.httpOnly) line += "; HttpOnly";
+  if (Number.isFinite(cookie.expirationDate)) line += `; Expires=${new Date(cookie.expirationDate * 1e3).toUTCString()}`;
+  if (/^(strict|lax|none)$/i.test(String(cookie.sameSite || ""))) line += `; SameSite=${cookie.sameSite}`;
+  return line;
+}
+function expiredCookieLine(cookie) {
+  const clean = (value) => String(value == null ? "" : value).replace(/[\r\n]/g, "");
+  let line = `${clean(cookie.name)}=; Max-Age=0; Path=${clean(cookie.path || "/")}`;
+  if (cookie.domain && !cookie.hostOnly) line += `; Domain=${clean(cookie.domain)}`;
+  return line;
+}
+async function cookieSnapshot(session) {
+  const snapshot = /* @__PURE__ */ new Map();
+  if (!session?.cookies?.get) return snapshot;
+  const cookies = await session.cookies.get({});
+  for (const cookie of cookies || []) snapshot.set(cookieKey(cookie), cookie);
+  return snapshot;
+}
+function changedCookieLines(before, after) {
+  const lines = [];
+  for (const [key, cookie] of after) {
+    const previous = before.get(key);
+    if (!previous || String(previous.value) !== String(cookie.value)) lines.push(cookieLine(cookie));
+  }
+  for (const [key, cookie] of before) if (!after.has(key)) lines.push(expiredCookieLine(cookie));
+  return lines;
+}
+function addSetCookieLines(response, lines) {
+  if (!lines.length) return;
+  const raw = Array.isArray(response.rawHeaders) ? response.rawHeaders.slice() : [];
+  const existing = /* @__PURE__ */ new Set();
+  for (let index = 0; index + 1 < raw.length; index += 2) {
+    if (String(raw[index]).toLowerCase() === "set-cookie") existing.add(String(raw[index + 1]).trim());
+  }
+  for (const line of lines) {
+    if (existing.has(line.trim())) continue;
+    existing.add(line.trim());
+    raw.push("Set-Cookie", line);
+  }
+  response.rawHeaders = raw;
+}
+function parseCookieHeader(header) {
+  const cookies = [];
+  for (const part of String(header || "").split(";")) {
+    const pair = part.trim();
+    const equal = pair.indexOf("=");
+    if (equal < 1) continue;
+    const name = pair.slice(0, equal).trim();
+    const value = pair.slice(equal + 1).trim();
+    if (!/^[\w!#$%&'*+.^`|~-]+$/.test(name) || /[\r\n]/.test(value)) continue;
+    cookies.push({ name, value });
+  }
+  return cookies;
+}
+async function seedExplicitCookies(session, url, header) {
+  if (!session?.cookies?.set) return;
+  for (const cookie of parseCookieHeader(header)) {
+    try {
+      await session.cookies.set({ url: url.origin + "/", name: cookie.name, value: cookie.value });
+    } catch (_) {
+    }
+  }
+}
+async function copySessionCookies(source, target) {
+  if (!source?.cookies?.get || !target?.cookies?.set) return;
+  let cookies = [];
+  try {
+    cookies = await source.cookies.get({});
+  } catch (_) {
+    return;
+  }
+  for (const cookie of cookies || []) {
+    const value = {
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path || "/",
+      secure: Boolean(cookie.secure),
+      httpOnly: Boolean(cookie.httpOnly)
+    };
+    if (Number.isFinite(cookie.expirationDate)) value.expirationDate = cookie.expirationDate;
+    if (cookie.sameSite) value.sameSite = cookie.sameSite;
+    try {
+      await target.cookies.set(value);
+    } catch (_) {
+    }
+  }
+}
 function createGmRequestHost(options = {}) {
   const log = typeof options.log === "function" ? options.log : () => {
   };
   const electronNet = options.net && typeof options.net.request === "function" ? options.net : null;
+  const isolatedSession = typeof options.isolatedSession === "function" ? options.isolatedSession : null;
   const tlsOptions = options.tlsOptions && typeof options.tlsOptions === "object" ? options.tlsOptions : {};
   const active = /* @__PURE__ */ new Map();
   async function sessionCookieHeader(session, url) {
@@ -72,7 +172,7 @@ function createGmRequestHost(options = {}) {
       }
     }
   }
-  function onceNet(url, request, settle, session) {
+  function onceNet(url, request, settle, session, useSessionCookies) {
     const method = String(request.method || "GET").toUpperCase();
     const headers = { ...request.headers };
     const body = request.data == null ? null : Buffer.from(String(request.data), "utf8");
@@ -84,7 +184,7 @@ function createGmRequestHost(options = {}) {
         clearTimeout(timer);
         fn();
       };
-      const req = electronNet.request({ method, url: url.href, session: session || void 0, useSessionCookies: false, redirect: "manual" });
+      const req = electronNet.request({ method, url: url.href, session: session || void 0, useSessionCookies, redirect: "manual" });
       for (const [k, v] of Object.entries(headers)) {
         try {
           req.setHeader(k, String(v));
@@ -145,8 +245,8 @@ function createGmRequestHost(options = {}) {
       req.end();
     });
   }
-  function once(url, request, settle, session) {
-    if (electronNet) return onceNet(url, request, settle, session);
+  function once(url, request, settle, session, useSessionCookies = false) {
+    if (electronNet) return onceNet(url, request, settle, session, useSessionCookies);
     const method = String(request.method || "GET").toUpperCase();
     const client = url.protocol === "https:" ? https : http;
     const headers = { ...request.headers };
@@ -186,7 +286,9 @@ function createGmRequestHost(options = {}) {
       method: String(input.method || "GET").toUpperCase(),
       headers: {},
       data: input.data,
-      timeout: Math.max(1e3, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, 6e4)),
+      // Xiaomi's QR login holds one long-poll request for up to 315 seconds.
+      // Capping every GM request at 60 seconds closes the QR before a slow scan.
+      timeout: Math.max(1e3, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)),
       manualRedirect: input.redirect === "manual",
       anonymous: Boolean(input.anonymous),
       explicitCookie: typeof input.cookie === "string" ? input.cookie : null,
@@ -194,15 +296,9 @@ function createGmRequestHost(options = {}) {
     };
     for (const [key, value] of Object.entries(input.headers || {})) {
       if (typeof value !== "string" || !/^[\w-]+$/.test(key)) continue;
-      // Node only accepts ISO-8859-1 header values. A value carrying control
-      // bytes or CJK text (the OPPO risk header x-euler-const is produced by a
-      // wasm SDK and occasionally picks up stray bytes) makes client.request()
-      // throw ERR_INVALID_CHAR synchronously — the request never leaves the
-      // process, yet it used to be reported as a network failure. Reject it here
-      // with the offending code points so the log says what actually happened.
       if (!/^[\t\x20-\x7E\x80-\xFF]*$/.test(value)) {
-        const bad = [...new Set([...value].filter(ch => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
-        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map(ch => "U+" + ch.codePointAt(0).toString(16).toUpperCase()).join(","));
+        const bad = [...new Set([...value].filter((ch) => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
+        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map((ch) => "U+" + ch.codePointAt(0).toString(16).toUpperCase()).join(","));
       }
       request.headers[key] = value;
     }
@@ -212,19 +308,46 @@ function createGmRequestHost(options = {}) {
     const useSessionCookies = !request.anonymous && request.explicitCookie == null;
     const settle = { cancel: null };
     active.set(id, settle);
+    let jar = null;
     try {
+      if (isolatedSession) {
+        jar = await isolatedSession();
+        if (!jar) throw new Error("隔离 Cookie 会话不可用");
+        if (context.session?.getUserAgent && jar.setUserAgent) {
+          try {
+            jar.setUserAgent(context.session.getUserAgent());
+          } catch (_) {
+          }
+        }
+        if (request.explicitCookie != null) await seedExplicitCookies(jar, url, request.explicitCookie);
+        else if (useSessionCookies) await copySessionCookies(context.session, jar);
+      }
       let method = request.method;
       let data = request.data;
+      const syntheticCookieLines = [];
       for (let hop = 0; ; hop += 1) {
         const headers = { ...request.headers };
-        if (request.explicitCookie != null) {
+        if (jar) {
+          for (const name of Object.keys(headers)) if (name.toLowerCase() === "cookie") delete headers[name];
+        } else if (request.explicitCookie != null) {
           if (request.explicitCookie) headers.Cookie = request.explicitCookie;
         } else if (useSessionCookies) {
           const cookie = await sessionCookieHeader(context.session, url);
           if (cookie) headers.Cookie = cookie;
         }
-        const { response, body } = await once(url, { method, headers, data, timeout: request.timeout }, settle, context.session);
-        if (useSessionCookies) await persistCookies(context.session, response, url);
+        const before = jar ? await cookieSnapshot(jar) : null;
+        const { response, body } = await once(
+          url,
+          { method, headers, data, timeout: request.timeout },
+          settle,
+          jar || context.session,
+          Boolean(jar) || useSessionCookies
+        );
+        if (jar && before) {
+          const lines = changedCookieLines(before, await cookieSnapshot(jar));
+          if (request.manualRedirect) addSetCookieLines(response, lines);
+          else syntheticCookieLines.push(...lines);
+        } else if (useSessionCookies) await persistCookies(context.session, response, url);
         const status = Number(response.statusCode || 0);
         const location = response.headers.location;
         if (!request.manualRedirect && [301, 302, 303, 307, 308].includes(status) && location) {
@@ -239,6 +362,7 @@ function createGmRequestHost(options = {}) {
           url = next;
           continue;
         }
+        if (!request.manualRedirect) addSetCookieLines(response, syntheticCookieLines);
         return {
           kind: "load",
           status,
@@ -249,6 +373,10 @@ function createGmRequestHost(options = {}) {
         };
       }
     } finally {
+      if (jar?.clearStorageData) try {
+        await jar.clearStorageData();
+      } catch (_) {
+      }
       active.delete(id);
     }
   }

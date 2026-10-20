@@ -6,6 +6,8 @@ import entries_ = require('./entries');
 const { ENTRIES, matchesAnyEntry, TEST_ORIGIN } = entries_;
 import gm_shim_ = require('./gm-shim');
 const { createGmShim, wrapWithGm } = gm_shim_;
+import direct_login_bridge_ = require('./direct-login-bridge');
+const { installDirectEventBridge } = direct_login_bridge_;
 
 export = function startInjector(config) {
   const channel = String(config?.hostChannel || config?.id || 'unknown');
@@ -49,11 +51,21 @@ export = function startInjector(config) {
     window.__JND_HOST = {
       ...(window.__JND_HOST || {}),
       kind: 'micro',
+      source: 'sgs-multichannel',
       shell: 'Electron',
       shellVersion: String(config?.shellVersion || ''),
       engine: 'Chromium',
       channel: currentHostChannel(),
     };
+  }
+
+  function installDirectEventHost() {
+    installDirectEventBridge({
+      window,
+      storage: window.sessionStorage,
+      send: (name, payload) => ipcRenderer.send(name, payload),
+      report,
+    });
   }
 
   function installUpdateBridge(startupRecord) {
@@ -492,6 +504,7 @@ export = function startInjector(config) {
 
   async function injectStartupRuntime() {
     installHostFacts();
+    installDirectEventHost();
     const url = currentUrl();
     if (!url) return false;
     const game = isGameDocument();
@@ -513,7 +526,7 @@ export = function startInjector(config) {
     }
     if (game) { try { await injectPlugins(); } catch (error) { report('warn', `插件注入失败：${error.message}`); } }
     if (!game) {
-      if (process.isMainFrame && /^https?:$/.test(url.protocol)) {
+      if (process.isMainFrame && isOfficialLoginPage(url)) {
         try { installLandingNetworkGuard(); } catch (error) { report('warn', `落地页网络守卫失败：${error.message}`); }
         try { installLandingFit(); } catch (error) { report('warn', `落地页适配失败：${error.message}`); }
       }

@@ -1108,6 +1108,20 @@ export = function startMicroClient(config) {
         if (found.tab.loginProvider) { found.tab.loginProvider = null; found.tab.loginPrev = null; qrClose(found.record, found.tab, 'landing'); }
       } else { setContainer(slot, { status: 'none', nick: '', uid: '' }); log('login-trace landing slot=', slot, 'loggedIn=', false); }
     });
+    ipcMain.on('jnd-direct-login-event', (event, state) => {
+      const found = tabOf(event.sender); if (!found) return;
+      const type = String(state?.type || '');
+      if (!['ready', 'navigate', 'game-auth', 'error', 'cancel'].includes(type)) return;
+      const provider = String(state?.provider || '').slice(0, 32);
+      log('login-trace direct slot=', found.tab.slot, 'type=', type, 'provider=', provider,
+        'profile=', state?.profileId ? 'yes' : 'no',
+        type === 'game-auth' ? `success=${state?.success !== false}` : '',
+        type === 'error' || type === 'game-auth' ? `code=${String(state?.code || '').slice(0, 64)}` : '');
+      if (type === 'game-auth' && state?.success === false) {
+        log('login-error slot=', found.tab.slot, 'provider=', provider, 'stage=game_auth',
+          JSON.stringify({code: String(state?.code || 'GAME_HANDOFF_FAILED').slice(0, 64)}));
+      }
+    });
     // 统一登录器投影（登录页 preload → 扫码窗）
     ipcMain.on('jnd-login-state', (event, state) => {
       const found = tabOf(event.sender);
@@ -1205,7 +1219,12 @@ export = function startMicroClient(config) {
         return { id: component.id, seedPath, seedVersion };
       }),
     });
-    gmHost = createGmRequestHost({ log , net });
+    let gmSessionSerial = 0;
+    gmHost = createGmRequestHost({
+      log, net,
+      isolatedSession: () => electron_.session.fromPartition(
+        `jnd-gm-${process.pid}-${Date.now().toString(36)}-${++gmSessionSerial}`, { cache: false }),
+    });
     shellUpdateHost = createShellUpdateHost({
       log,
       shellVersion: channel.shellVersion,
