@@ -63,7 +63,7 @@ npx electron jinnangdai --remote-debugging-port=9333
 
 ## 贡献
 
-issue 与 PR 欢迎。界面改动先在 `design/shell-harness.html` 里看效果再落到壳里。
+issue 与 PR 欢迎。界面改动先在 `design/shell-harness.html` 里看效果再落到客户端里。
 
 ## 许可证
 
