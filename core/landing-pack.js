@@ -44,9 +44,11 @@ function rewrite(html, bg) {
 function createLandingPack(opts) {
   const { dir, seedDir, log } = opts;
   let pack = null;
+  let documentScripts = /* @__PURE__ */ new Set();
   function load() {
     const own = readManifest(dir), seed = readManifest(seedDir);
     pack = own && (!seed || own.fetchedAt >= seed.fetchedAt) ? { dir, m: own } : seed ? { dir: seedDir, m: seed } : null;
+    documentScripts = new Set(pack ? docAssets(pack.m.html).filter((url) => /\.js$/i.test(url) && Boolean(pack.m.files[url])) : []);
     log("landing pack", pack ? `from=${pack.dir === dir ? "userData" : "seed"} files=${Object.keys(pack.m.files).length} fetched=${new Date(pack.m.fetchedAt).toISOString()} bg=${pack.m.bg ? "yes" : "no"}` : "none");
   }
   load();
@@ -57,6 +59,10 @@ function createLandingPack(opts) {
     } catch (_) {
       return false;
     }
+  }
+  function isDocumentScript(url, documentUrl) {
+    if (!pack || !isDoc(documentUrl)) return false;
+    return documentScripts.has(url.split(/[?#]/)[0]);
   }
   function serveDoc() {
     if (!pack) return null;
@@ -157,6 +163,6 @@ function createLandingPack(opts) {
     })();
     return refreshing;
   }
-  return { isDoc, serveDoc, serveAsset, noteBackground, refresh, has: () => Boolean(pack) };
+  return { isDoc, isDocumentScript, serveDoc, serveAsset, noteBackground, refresh, has: () => Boolean(pack) };
 }
 module.exports = { createLandingPack, DOC_URL, rewrite, docAssets, cssAssets };

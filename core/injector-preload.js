@@ -445,7 +445,9 @@ ${record.code}
             await (request.web && bridge.webFinish ? bridge.webFinish(request.provider, request.web) : bridge.start(request.provider));
           } catch (error) {
             if (ownRevision === revision) forward({ provider: request.provider, stage: "", qr: "", text: "", error: { code: "LOGIN_START_FAILED" } });
-            report("warn", `统一登录器发起失败：${error?.message || error}`);
+            report("warn", "LOGIN_START_FAILED");
+          } finally {
+            delete request.web;
           }
         }
       } finally {

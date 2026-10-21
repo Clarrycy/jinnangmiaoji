@@ -11,6 +11,8 @@ const component_update_host_ = require("./component-update-host");
 const { createComponentUpdateHost } = component_update_host_;
 const gm_request_host_ = require("./gm-request-host");
 const { createGmRequestHost } = gm_request_host_;
+const steam_direct_ = require("./steam-direct-agent");
+const { createSteamDirectConnector } = steam_direct_;
 const shell_update_host_ = require("./shell-update-host");
 const { createShellUpdateHost } = shell_update_host_;
 const credential_store_ = require("./credential-store");
@@ -133,7 +135,7 @@ module.exports = function startMicroClient(config) {
       const evidence = loginRecorder.takeEvidence();
       if (evidence.length) setImmediate(() => log("login-evidence", JSON.stringify(evidence)));
     }
-    logBuffer += `[${(/* @__PURE__ */ new Date()).toISOString()}] ${args.join(" ")}
+    logBuffer += `[${(/* @__PURE__ */ new Date()).toISOString()}] ${login_recorder_.redactText(args.join(" "))}
 `;
     const head = String(args[0] || "");
     if (head.startsWith("login-trace") || head === "will-navigate" || head === "did-start-loading" || head.startsWith("chrome-")) {
@@ -165,8 +167,8 @@ module.exports = function startMicroClient(config) {
   const entryByLabel = (label) => ENTRIES.find((e) => e.label === label) || null;
   const entryUrl = (entry) => TEST_ORIGIN ? `${TEST_ORIGIN}/login/x/index` : entry.entry;
   const ASSET_HOSTS = /(^|\.)(sanguosha\.com|yokaverse\.com|4399ytzg2\.com|4399iw\d*\.com|iwan4399\.com)$/i;
-  const ASSET_EXT = /\.(?:js|css|json|png|jpe?g|webp|gif|svg|atlas|sgs|bin|wasm|mp3|ogg|wav|m4a|ttf|otf|woff2?|fnt|ani|sk|skel|plist|txt|lh|ls|lmat|lm|lani|lav|ltc|lsani|ktx|pvr|astc|mp4)$/i;
-  const ASSET_TYPES = /* @__PURE__ */ new Set(["script", "image", "xhr", "fetch", "media", "font", "stylesheet", "other"]);
+  const ASSET_EXT = /\.(?:css|json|png|jpe?g|webp|gif|svg|atlas|sgs|bin|wasm|mp3|ogg|wav|m4a|ttf|otf|woff2?|fnt|ani|sk|skel|plist|txt|lh|ls|lmat|lm|lani|lav|ltc|lsani|ktx|pvr|astc|mp4)$/i;
+  const ASSET_TYPES = /* @__PURE__ */ new Set(["image", "xhr", "fetch", "media", "font", "stylesheet", "other"]);
   const SHARED_CACHE = process.env.JND_NO_SHARED_CACHE !== "1";
   function isSharedAsset(url) {
     if (!ASSET_HOSTS.test(url.hostname)) return false;
@@ -185,16 +187,17 @@ module.exports = function startMicroClient(config) {
         callback({ cancel: true });
         return;
       }
-      if (!SHARED_CACHE || details.method !== "GET" || !ASSET_TYPES.has(String(details.resourceType))) {
+      if (!SHARED_CACHE || details.method !== "GET") {
         callback({});
         return;
       }
+      const localDocumentScript = details.resourceType === "script" && Boolean(landingPack && (landingPack.isDocumentScript(details.url, details.frame?.url || "") || landingPack.isDocumentScript(details.url, details.referrer || "")));
       let url = null;
       try {
         url = new URL(details.url);
       } catch (_) {
       }
-      if (!url || !isSharedAsset(url)) {
+      if (!localDocumentScript && (!url || !ASSET_TYPES.has(String(details.resourceType)) || !isSharedAsset(url))) {
         callback({});
         return;
       }
@@ -909,7 +912,7 @@ module.exports = function startMicroClient(config) {
     const tab = record.tabs.get(id);
     if (!tab || kind !== "game" || tab.contents.isDestroyed()) return;
     const settle = () => {
-      if (record.cur !== id || tab.contents.isDestroyed()) return;
+      if (record.closing || record.win.isDestroyed() || record.cur !== id || record.curKind !== "game" || record.tabs.get(id) !== tab || tab.owner !== record || tab.contents.isDestroyed()) return;
       raiseTab(record, tab);
       record.active = tab;
       dropLeaving(record);
@@ -919,7 +922,7 @@ module.exports = function startMicroClient(config) {
         } catch (_) {
         }
       }
-      tab.contents.focus();
+      restoreWindowFocus(record);
       pushTabState(record, tab);
     };
     if (record.active === tab) {
@@ -1052,6 +1055,7 @@ module.exports = function startMicroClient(config) {
     if (card && tab.loginProvider) chromeSend(record, "jnd-chrome-qr", { action: "open", id, ...card });
     else tab.qrModel = null;
     record.win.contentView.addChildView(tab.view, 0);
+    registerTaskWindow(record);
     const { width, height } = record.win.getContentBounds();
     tab.view.setBounds(viewportBounds(width, height, record.win.isFullScreen()));
     try {
@@ -1154,10 +1158,10 @@ module.exports = function startMicroClient(config) {
         webUrlWaiters.delete(reqId);
         resolve({ url: "", error: "BRIDGE_TIMEOUT" });
       }, 4e3);
-      webUrlWaiters.set(reqId, (m) => {
+      webUrlWaiters.set(reqId, { sender: tab.contents, done: (m) => {
         clearTimeout(timer);
         resolve({ url: String(m?.url || ""), error: String(m?.error || "") });
-      });
+      } });
       try {
         tab.contents.send("jnd-login-web-url", { provider, reqId });
       } catch (_) {
@@ -1177,7 +1181,7 @@ module.exports = function startMicroClient(config) {
     if (provider === "steam") return u.origin === "https://10th-ly-login.sanguosha.com" && u.pathname === "/steam/oauth/callback.html" && /access_token=/.test(u.hash) ? { href: u.href } : null;
     if (provider === "qq") return u.origin === "https://imgcache.qq.com" && u.pathname === "/open/connect/widget/mobile/login/proxy.htm" || u.protocol === "auth:" && u.host === "tauth.qq.com" ? { href: u.href } : null;
     if (provider === "huawei") return u.protocol === "com.huawei.apps.111830943:" && u.pathname === "/oauth2redirect" && /[?&]code=/.test(u.search) ? { href: u.href } : null;
-    if (provider === "honor") return raw.startsWith("hms://redirect_url") && /[?&]code=/.test(raw) ? { href: raw } : null;
+    if (provider === "honor") return u.protocol === "hms:" && u.host === "redirect_url" && u.pathname === "" && /[?&]code=/.test(raw) ? { href: raw } : null;
     if (provider === "xiaomi") return u.origin === "http://game.xiaomi.com" && u.pathname === "/oauthcallback/mioauth" && u.searchParams.get("code") ? { href: u.href } : null;
     if (provider === "oppo") {
       if (u.origin !== "https://game-login.heytap.com" || !u.pathname.startsWith("/game-union-h5/h5/client-login/")) return null;
@@ -1196,7 +1200,9 @@ module.exports = function startMicroClient(config) {
   async function openWebSheet(record, tab) {
     const provider = String(tab.loginProvider || "");
     if (!WEB_TITLES[provider] || tab.webSheet || tab.contents.isDestroyed()) return;
+    const loginRequest = tab.loginRequest, openSeq = tab.webOpenSeq = (tab.webOpenSeq || 0) + 1;
     const { url, error } = await requestWebURL(tab, provider);
+    if (tab.webOpenSeq !== openSeq || tab.owner !== record || record.closing || tab.loginProvider !== provider || tab.loginRequest !== loginRequest) return;
     if (!url || !/^https:\/\//.test(url) || tab.webSheet || tab.contents.isDestroyed()) {
       log("login-trace web open failed slot=", tab.slot, provider, error || "no-url");
       return;
@@ -1243,16 +1249,13 @@ ${v.openToken}` !== vivoBase) finish(v);
       if (!wc.isDestroyed()) wc.close({ waitForBeforeUnload: false });
       chromeSend(record, "jnd-chrome-websheet", { action: "close", id: tab.id });
       log("login-trace web close slot=", tab.slot, provider, "reason=", reason);
-      if (reason !== "done" && !tab.contents.isDestroyed()) try {
-        tab.contents.focus();
-      } catch (_) {
-      }
+      if (reason !== "done") restoreWindowFocus(tab.owner);
     };
     const finish = (payload) => {
       if (done) return;
       done = true;
       close("done");
-      if (tab.contents.isDestroyed() || tab.loginProvider !== provider) return;
+      if (tab.contents.isDestroyed() || tab.loginProvider !== provider || tab.loginRequest !== loginRequest || tab.owner !== record) return;
       const requestId = ++tab.loginRequest;
       tab.loginStartedFor = requestId;
       tab.loginSeen = "exchanging";
@@ -1473,6 +1476,29 @@ ${v.openToken}`;
     return rows;
   }
   const pushPlugins = () => broadcast("jnd-chrome-data", "plugins", pluginRows());
+  function registerTaskWindow(record) {
+    const { win } = record;
+    if (process.platform !== "win32" || record.closing || win.isDestroyed()) return;
+    try {
+      win.setParentWindow(null);
+      win.setSkipTaskbar(false);
+      log("window-shell registration requested id=", win.id, "visible=", win.isVisible(), "focusable=", win.isFocusable());
+    } catch (error) {
+      log("window-shell registration failed id=", win.id, "code=", error?.code || "WINDOW_REGISTRATION_FAILED");
+    }
+  }
+  function focusContents(record, contents) {
+    if (record.closing || record.win.isDestroyed() || !record.win.isVisible() || !record.win.isFocused() || !contents || contents.isDestroyed()) return;
+    try {
+      if (!contents.isFocused()) contents.focus();
+    } catch (_) {
+    }
+  }
+  function restoreWindowFocus(record) {
+    const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
+    const contents = record.chromeKeys || record.curKind !== "game" ? record.chromeContents : tab?.webSheet?.view.webContents || tab?.contents;
+    focusContents(record, contents);
+  }
   function createWindow(options = {}) {
     const iconPath = path.join(__dirname, "..", channel.id, "build", "icon.ico");
     const iconPng = path.join(__dirname, "icon-256.png");
@@ -1494,6 +1520,8 @@ ${v.openToken}`;
       /* Windows：标题栏连同右上三键都由 chrome 视图自绘。macOS（作者 10-21）：保留系统红绿灯，标题栏其余部分仍自绘 */
       ...IS_MAC ? { titleBarStyle: "hidden", trafficLightPosition: { ...MAC_LIGHTS } } : { frame: false },
       autoHideMenuBar: true,
+      focusable: true,
+      skipTaskbar: false,
       show: true,
       backgroundColor: BAR_COLOR,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false }
@@ -1508,6 +1536,8 @@ ${v.openToken}`;
     const overlays = createOverlays({ WebContentsView, ipcMain, win, titleHeight: TITLE_HEIGHT, log });
     const record = { win, chrome, chromeContents: chrome.webContents, tabs: /* @__PURE__ */ new Map(), order: [], cur: null, curKind: "game", overlays, covered: false, closing: false, ready: false, pendingAdopt: options.adopt || null, pageKind: options.pageKind || null, follow: null, active: null };
     windows.set(win, record);
+    registerTaskWindow(record);
+    win.on("show", () => registerTaskWindow(record));
     win.contentView.addChildView(chrome);
     chrome.webContents.on("will-navigate", (event) => event.preventDefault());
     chrome.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -1539,7 +1569,10 @@ ${v.openToken}`;
     win.on("resize", relayout);
     relayout();
     const windowState = () => chromeSend(record, "jnd-chrome-window-state", { maximized: win.isMaximized(), focused: win.isFocused(), fullscreen: win.isFullScreen() });
-    win.on("focus", windowState);
+    win.on("focus", () => {
+      windowState();
+      restoreWindowFocus(record);
+    });
     win.on("blur", windowState);
     const memTimer = setInterval(() => {
       for (const [, tab] of record.tabs) pushTabState(record, tab);
@@ -1558,7 +1591,7 @@ ${v.openToken}`;
       relayout();
       const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
       log("fullscreen enter focus=", win.webContents.isFocused() ? "frame" : record.chromeContents.isFocused() ? "chrome" : tab && !tab.contents.isDestroyed() && tab.contents.isFocused() ? "game" : "none", "covered=", record.covered);
-      if (!record.covered && tab && record.curKind === "game" && !tab.contents.isDestroyed()) tab.contents.focus();
+      if (!record.covered && tab && record.curKind === "game") restoreWindowFocus(record);
     });
     win.on("leave-full-screen", () => {
       log("fullscreen leave");
@@ -1587,6 +1620,10 @@ ${v.openToken}`;
         event.preventDefault();
         chromeSend(record, "jnd-chrome-close-request");
         return;
+      }
+      if (process.platform === "win32") try {
+        win.setSkipTaskbar(true);
+      } catch (_) {
       }
       try {
         if (win.isVisible()) win.hide();
@@ -1824,8 +1861,8 @@ ${v.openToken}`;
       record.chromeKeys = chromeKeys;
       const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
       try {
-        if (chromeKeys && !wasKeys) record.chromeContents.focus();
-        else if (!chromeKeys && (wasKeys || !covered && record.chromeContents.isFocused()) && tab && record.curKind === "game" && !tab.contents.isDestroyed()) tab.contents.focus();
+        if (chromeKeys && !wasKeys) restoreWindowFocus(record);
+        else if (!chromeKeys && (wasKeys || !covered && record.chromeContents.isFocused()) && tab && record.curKind === "game") restoreWindowFocus(record);
       } catch (_) {
       }
     });
@@ -2159,7 +2196,7 @@ ${v.openToken}`;
         sheet.view.setBounds(rect);
         record.win.contentView.addChildView(sheet.view);
         sheet.view.setVisible(true);
-        sheet.view.webContents.focus();
+        if (record.cur === tab.id) restoreWindowFocus(record);
       } catch (_) {
       }
     });
@@ -2167,11 +2204,11 @@ ${v.openToken}`;
       const record = [...windows.values()].find((r) => r.chrome.webContents === event.sender);
       record?.tabs.get(Number(m?.id))?.webSheet?.close("user");
     });
-    ipcMain.on("jnd-login-web-url-result", (_event, m) => {
-      const done = webUrlWaiters.get(Number(m?.reqId));
-      if (done) {
+    ipcMain.on("jnd-login-web-url-result", (event, m) => {
+      const waiter = webUrlWaiters.get(Number(m?.reqId));
+      if (waiter?.sender === event.sender) {
         webUrlWaiters.delete(Number(m.reqId));
-        done(m);
+        waiter.done(m);
       }
     });
     ipcMain.on("jnd-open-page", (event, kind) => {
@@ -2261,7 +2298,17 @@ ${v.openToken}`;
         return { id: component.id, seedPath, seedVersion };
       })
     });
-    gmHost = createGmRequestHost({ log, net, trace: (e) => loginRecorder?.gm(e) });
+    gmHost = createGmRequestHost({
+      log,
+      net,
+      isolatedSession: (index) => electron_.session.fromPartition(`jnd-gm-${process.pid}-${index}`, { cache: false }),
+      trace: (e) => loginRecorder?.gm(e),
+      steamDirect: createSteamDirectConnector({
+        log,
+        cacheFile: path.join(app.getPath("userData"), "steam-direct-addresses.json"),
+        resolveProxy: (url) => electron_.session.defaultSession.resolveProxy(url)
+      })
+    });
     shellUpdateHost = createShellUpdateHost({
       log,
       net,

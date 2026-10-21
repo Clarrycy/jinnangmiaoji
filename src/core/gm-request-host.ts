@@ -6,6 +6,10 @@
 import http = require('http');
 import https = require('https');
 import zlib = require('zlib');
+import cookieJar = require('./gm-cookie-jar');
+import steam_direct_ = require('./steam-direct-agent');
+type SteamConnector = ReturnType<typeof steam_direct_.createSteamDirectConnector>;
+type SteamConnection = Awaited<ReturnType<SteamConnector['prepare']>>;
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
@@ -43,7 +47,8 @@ function parseSetCookie(line, url) {
   const parts = String(line).split(';').map(part => part.trim()).filter(Boolean);
   const [name, ...valueParts] = (parts.shift() || '').split('=');
   if (!name) return null;
-  const cookie: Record<string, any> = { url: url.origin + '/', name: name.trim(), value: valueParts.join('=') };
+  const cookie: Record<string, any> = { url: url.href, name: name.trim(), value: valueParts.join('='), path: url.pathname.slice(0, url.pathname.lastIndexOf('/') + 1).replace(/\/$/, '') || '/' };
+  let maxAge: number | undefined;
   for (const part of parts) {
     const [key, ...rest] = part.split('=');
     const attribute = key.trim().toLowerCase();
@@ -53,21 +58,25 @@ function parseSetCookie(line, url) {
     else if (attribute === 'secure') cookie.secure = true;
     else if (attribute === 'httponly') cookie.httpOnly = true;
     else if (attribute === 'expires' && Number.isFinite(Date.parse(value))) cookie.expirationDate = Date.parse(value) / 1000;
-    else if (attribute === 'max-age' && Number.isFinite(Number(value))) cookie.expirationDate = Date.now() / 1000 + Number(value);
+    else if (attribute === 'max-age' && /^-?\d+$/.test(value)) maxAge = Number(value);
+    else if (attribute === 'samesite') cookie.sameSite = { none: 'no_restriction', lax: 'lax', strict: 'strict' }[value.toLowerCase()];
   }
+  if (maxAge !== undefined) cookie.expirationDate = Math.max(0, Date.now() / 1000 + maxAge);
   return cookie;
 }
 
-function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptions?: Record<string, unknown>; net?: any; trace?: (event: any) => void } = {}) {
+function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptions?: Record<string, unknown>; net?: any; trace?: (event: any) => void; steamDirect?: SteamConnector; isolatedSession?: (index: number) => any } = {}) {
   const log = typeof options.log === 'function' ? options.log : () => {};
   /* 登录录制器：每一跳的请求与返回原样交出，脱敏由录制器在记下来之前做（login-recorder.ts）；录制器没开就是空函数 */
   const trace = (event) => { try { options.trace?.(event); } catch (_) {} };
-  /* 壳里传 Electron 的 net：请求走 Chromium 网络层（跟随系统代理、用 Chromium 的 DNS 与证书库）。
+  /* 壳里传 Electron 的 net：默认走 Chromium 网络层（跟随系统代理、用 Chromium 的 DNS 与证书库）。
+     指定的 Steam 认证接口在代理策略明确为 DIRECT 时才尝试独立 TLS 连接，见 once()。
      原来走 Node https 不吃系统代理，国内挂代理的用户 Steam 三个域名全部超时（2026-10-20 多名用户反馈）。测试里没有 Electron 就还走 Node。 */
   const electronNet = options.net && typeof options.net.request === 'function' && process.env.JND_GM_NODE !== '1' ? options.net : null; /* JND_GM_NODE=1：排查用，强制走 Node */
   // 仅测试用：对本地自签名服务放宽 TLS；生产不传。
   const tlsOptions = options.tlsOptions && typeof options.tlsOptions === 'object' ? options.tlsOptions : {};
   const active = new Map();
+  const pool = options.isolatedSession ? cookieJar.createPool(options.isolatedSession) : null;
 
   async function sessionCookieHeader(session, url) {
     if (!session?.cookies) return '';
@@ -82,7 +91,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
     for (const line of setCookieLines(response)) {
       const cookie = parseSetCookie(line, url);
       if (!cookie) continue;
-      try { await session.cookies.set(cookie); } catch (_) {}
+      await session.cookies.set(cookie);
     }
   }
 
@@ -93,10 +102,11 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
     return new Promise<{ response: any; body: Buffer }>((resolve, reject) => {
       let done = false;
       const finish = (fn: () => void) => { if (done) return; done = true; clearTimeout(timer); fn(); };
-      /* 传输用默认会话：标签会话上挂着壳的 webRequest 监听，主进程经它发请求会被拦成 ERR_BLOCKED_BY_CLIENT（2026-10-20 实机日志）；cookie 记账仍按调用方的会话 */
+      // The isolated session has no game webRequest hooks; never pass the caller session here.
       /* 跨源 Referer：Chromium 网络层会按默认 referrer 策略把这种请求整个拒掉（ERR_BLOCKED_BY_CLIENT，2026-10-20 实测），脚本模拟浏览器时又必须带它——指定 unsafe-url 让 referrer 原样带过去 */
       const hasReferer = Object.keys(headers).some(k => k.toLowerCase() === 'referer');
-      void session; const req = electronNet.request({ method, url: url.href, useSessionCookies: false, redirect: 'manual', ...(hasReferer ? { referrerPolicy: 'unsafe-url' } : {}) });
+      for (const k of Object.keys(headers)) if (session && k.toLowerCase() === 'cookie') delete headers[k];
+      const req = electronNet.request({ method, url: url.href, ...(session ? { session } : {}), useSessionCookies: Boolean(session), redirect: 'manual', ...(hasReferer ? { referrerPolicy: 'unsafe-url' } : {}) });
       for (const [k, v] of Object.entries(headers)) { try { req.setHeader(k, String(v)); } catch (_) {} }
       const timer = setTimeout(() => { finish(() => reject(Object.assign(new Error('timeout'), { kind: 'timeout' }))); try { req.abort(); } catch (_) {} }, request.timeout);
       settle.cancel = reason => { finish(() => reject(reason)); try { req.abort(); } catch (_) {} };
@@ -104,7 +114,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
       req.on('redirect', (statusCode, _method, redirectUrl, responseHeaders) => {
         const raw: string[] = []; for (const [k, v] of Object.entries(responseHeaders || {})) for (const one of (Array.isArray(v) ? v : [v])) raw.push(k, String(one));
         const loc = Object.entries(responseHeaders || {}).find(([k]) => k.toLowerCase() === 'location');
-        finish(() => resolve({ response: { statusCode, statusMessage: '', headers: { location: loc ? String(Array.isArray(loc[1]) ? loc[1][0] : loc[1]) : undefined }, rawHeaders: raw }, body: Buffer.alloc(0) }));
+        finish(() => resolve({ response: { cookiesHandled: Boolean(session), statusCode, statusMessage: '', headers: { location: loc ? String(Array.isArray(loc[1]) ? loc[1][0] : loc[1]) : undefined }, rawHeaders: raw }, body: Buffer.alloc(0) }));
         try { req.abort(); } catch (_) {}
       });
       req.on('response', (response: any) => {
@@ -114,7 +124,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
           const raw: string[] = Array.isArray(response.rawHeaders) ? response.rawHeaders.map(String) : [];
           if (!raw.length) for (const [k, v] of Object.entries(response.headers || {})) for (const one of (Array.isArray(v) ? v : [v])) raw.push(k, String(one));
           const headersObj: Record<string, any> = {}; for (const [k, v] of Object.entries(response.headers || {})) headersObj[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
-          finish(() => resolve({ response: { statusCode: Number(response.statusCode || 0), statusMessage: String(response.statusMessage || ''), headers: headersObj, rawHeaders: raw }, body: Buffer.concat(chunks) }));
+          finish(() => resolve({ response: { cookiesHandled: Boolean(session), statusCode: Number(response.statusCode || 0), statusMessage: String(response.statusMessage || ''), headers: headersObj, rawHeaders: raw }, body: Buffer.concat(chunks) }));
         });
         response.on('error', (e: any) => finish(() => reject(e)));
         response.on('aborted', () => finish(() => reject(new Error('Response aborted'))));
@@ -125,8 +135,30 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
     });
   }
 
-  function once(url, request, settle, session?) {
-    if (electronNet) return onceNet(url, request, settle, session);
+  async function once(url, request, settle, session?) {
+    if (!electronNet || !options.steamDirect || !steam_direct_.isSteamDirectUrl(url))
+      return electronNet ? onceNet(url, request, settle, session) : onceNode(url, request, settle);
+    const started = Date.now(), control = new AbortController();
+    settle.cancel = reason => control.abort(reason);
+    const deadline = setTimeout(() => settle.cancel?.(Object.assign(new Error('timeout'), { kind: 'timeout' })), request.timeout);
+    let direct: SteamConnection = null;
+    try {
+      try { direct = await options.steamDirect.prepare(url, control.signal); }
+      catch (error) {
+        if (control.signal.aborted) throw control.signal.reason;
+        // Only connection establishment may fall back: no auth HTTP bytes sent yet.
+        log('steam-direct fallback', url.hostname, 'code=', error?.code || 'CONNECT_FAILED');
+      }
+      if (control.signal.aborted) throw control.signal.reason;
+      const remaining = request.timeout - (Date.now() - started);
+      if (remaining <= 0) throw Object.assign(new Error('timeout'), { kind: 'timeout' });
+      const bounded = { ...request, timeout: remaining };
+      // Once HTTP starts, never replay an authorization POST on another transport.
+      return await (direct ? onceNode(url, bounded, settle, direct) : onceNet(url, bounded, settle, session));
+    } finally { clearTimeout(deadline); direct?.cancel(); }
+  }
+
+  function onceNode(url, request, settle, direct: SteamConnection = null) {
     const method = String(request.method || 'GET').toUpperCase();
     const client = url.protocol === 'https:' ? https : http;
     const headers = { ...request.headers };
@@ -134,7 +166,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
     if (body && !Object.keys(headers).some(key => key.toLowerCase() === 'content-length')) headers['Content-Length'] = body.length;
     if (!Object.keys(headers).some(key => key.toLowerCase() === 'accept-encoding')) headers['Accept-Encoding'] = 'gzip, deflate, br';
     return new Promise<{ response: any; body: Buffer }>((resolve, reject) => {
-      const req = client.request(url, { method, headers, ...tlsOptions }, response => {
+      const req = client.request(url, { method, headers, ...tlsOptions, ...(direct ? { agent: direct.agent, rejectUnauthorized: true } : {}) }, response => {
         let stream: NodeJS.ReadableStream = response;
         const encoding = String(response.headers['content-encoding'] || '').toLowerCase();
         if (encoding === 'br') stream = response.pipe(zlib.createBrotliDecompress());
@@ -147,13 +179,16 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
           if (total > MAX_RESPONSE_BYTES) { req.destroy(new Error('响应超过大小限制')); return; }
           chunks.push(chunk);
         });
-        stream.on('end', () => resolve({ response, body: Buffer.concat(chunks) }));
-        stream.on('error', reject);
-        response.on('aborted', () => reject(new Error('Response aborted')));
+        stream.on('end', () => {
+          if (response.statusCode >= 200 && response.statusCode < 400) direct?.success(); else direct?.failure();
+          resolve({ response, body: Buffer.concat(chunks) });
+        });
+        stream.on('error', error => { direct?.failure(); reject(error); });
+        response.on('aborted', () => { direct?.failure(); reject(new Error('Response aborted')); });
       });
       settle.cancel = reason => req.destroy(reason);
       req.setTimeout(request.timeout, () => req.destroy(Object.assign(new Error('timeout'), { kind: 'timeout' })));
-      req.on('error', reject);
+      req.on('error', error => { direct?.failure(); reject(error); });
       if (body) req.write(body);
       req.end();
     });
@@ -178,26 +213,44 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
         const bad = [...new Set([...value].filter(ch => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
         throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map(ch => 'U+' + ch.codePointAt(0)!.toString(16).toUpperCase()).join(','));
       }
-      request.headers[key] = value;
+      if (key.toLowerCase() === 'cookie') { if (request.explicitCookie == null) request.explicitCookie = value; }
+      else request.headers[key] = value;
     }
     let url = new URL(String(input.url || ''));
     if (url.protocol !== 'https:') throw new Error(`GM 请求只允许 HTTPS：${url.protocol}`);
     if (!hostAllowed(url.hostname, context.allowHosts)) throw new Error(`域名不在 @connect 白名单：${url.hostname}`);
     const useSessionCookies = !request.anonymous && request.explicitCookie == null;
     const settle = { cancel: null };
-    active.set(id, settle);
+    const control = new AbortController(), deadline = Date.now() + request.timeout;
+    active.set(id, { cancel(reason) { control.abort(reason); settle.cancel?.(reason); } });
+    const timer = setTimeout(() => { const e = Object.assign(new Error('timeout'), { kind: 'timeout' }); control.abort(e); settle.cancel?.(e); }, request.timeout);
+    let lease = null;
+    const check = () => { if (control.signal.aborted) throw control.signal.reason; };
     try {
+      if (pool) {
+        lease = await pool.acquire(control.signal); check();
+        await cookieJar.seed(useSessionCookies ? context.session : null, lease.session, url, request.explicitCookie,
+          host => hostAllowed(host, context.allowHosts));
+        check();
+      }
       let method = request.method;
       let data = request.data;
       for (let hop = 0; ; hop += 1) {
         const headers: Record<string, any> = { ...request.headers };
-        if (request.explicitCookie != null) { if (request.explicitCookie) headers.Cookie = request.explicitCookie; }
-        else if (useSessionCookies) {
-          const cookie = await sessionCookieHeader(context.session, url);
+        check();
+        const jar = lease?.session, before = jar ? await cookieJar.snapshot(jar) : null;
+        if (jar || useSessionCookies) {
+          const cookie = await sessionCookieHeader(jar || context.session, url);
           if (cookie) headers.Cookie = cookie;
-        }
-        const { response, body } = await once(url, { method, headers, data, timeout: request.timeout }, settle, context.session);
-        if (useSessionCookies) await persistCookies(context.session, response, url);
+        } else if (request.explicitCookie && url.origin === new URL(input.url).origin) headers.Cookie = request.explicitCookie;
+        check();
+        const { response, body } = await once(url, { method, headers, data, timeout: Math.max(1, deadline - Date.now()) }, settle, jar);
+        check();
+        if (jar) {
+          // Explicit headers are needed for Node Steam TLS; Chromium stores its own response cookies.
+          if (!response.cookiesHandled) await persistCookies(jar, response, url);
+          await cookieJar.changed(before, jar, useSessionCookies ? context.session : null, response);
+        } else if (useSessionCookies) await persistCookies(context.session, response, url);
         const status = Number(response.statusCode || 0);
         const location = response.headers.location;
         trace({ id, hop, method, url: url.href, reqHeaders: headers, reqData: data, status, location, resHeaders: response.headers, setCookie: response.headers['set-cookie'], contentType: String(response.headers['content-type'] || ''), body: request.binary ? body : body.toString('utf8') });
@@ -220,7 +273,8 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
         };
       }
     } finally {
-      active.delete(id);
+      clearTimeout(timer); active.delete(id);
+      if (lease) await lease.release();
     }
   }
 
@@ -232,7 +286,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
         const kind = error?.kind === 'timeout' ? 'timeout' : error?.kind === 'abort' ? 'abort' : 'error';
         let u: any = null; try { u = new URL(String(input?.url || '')); } catch (_) {}
         trace({ id, hop: -1, method: String(input?.method || 'GET'), url: String(input?.url || ''), reqHeaders: input?.headers, reqData: input?.data, error: String(error?.message || error), kind });
-        log('GM request failed', JSON.stringify({ id, kind, message: String(error?.message || error), host: u?.hostname, path: u?.pathname, method: input?.method || 'GET', headers: Object.keys(input?.headers || {}), binary: input?.responseType === 'arraybuffer', redirect: input?.redirect || 'follow', anonymous: Boolean(input?.anonymous), cookie: typeof input?.cookie === 'string' ? input.cookie.length : null, transport: electronNet ? 'net' : 'node' }));
+        log('GM request failed', JSON.stringify({ id, kind, code: String(error?.code || 'GM_REQUEST_FAILED'), host: u?.hostname, path: u?.pathname, method: input?.method || 'GET', headers: Object.keys(input?.headers || {}), binary: input?.responseType === 'arraybuffer', redirect: input?.redirect || 'follow', anonymous: Boolean(input?.anonymous), cookie: typeof input?.cookie === 'string' ? input.cookie.length : null, transport: electronNet ? 'net' : 'node' }));
         return { kind, status: 0, statusText: '', responseHeaders: '', finalUrl: String(input?.url || ''), error: String(error?.message || error) };
       }
     },

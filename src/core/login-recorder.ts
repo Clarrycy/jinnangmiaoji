@@ -16,7 +16,7 @@ function redactUrl(raw: string): string {
 }
 // 一行日志里出现的地址都换成脱敏形式
 function redactText(text: string): string {
-  return String(text).replace(/https?:\/\/[^\s"'<>]+/g, m => redactUrl(m)).replace(/data:[^\s"']{40,}/g, m => `<data:${m.length}>`);
+  return String(text).replace(/[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'<>]+/gi, m => redactUrl(m)).replace(/data:[^\s"']{40,}/g, m => `<data:${m.length}>`);
 }
 // 提示类字段也只放行三种：带中文的服务端提示、全大写或数字的错误码、小写单词；大小写混排的字母数字串（可能是授权码、票据）只记长度
 function safeText(v: string): boolean {

@@ -10,6 +10,8 @@ import component_update_host_ = require('./component-update-host');
 const { createComponentUpdateHost } = component_update_host_;
 import gm_request_host_ = require('./gm-request-host');
 const { createGmRequestHost } = gm_request_host_;
+import steam_direct_ = require('./steam-direct-agent');
+const { createSteamDirectConnector } = steam_direct_;
 import shell_update_host_ = require('./shell-update-host');
 const { createShellUpdateHost } = shell_update_host_;
 import credential_store_ = require('./credential-store');
@@ -34,7 +36,7 @@ const { createOverlays } = popup_window_;
 // 一个窗口 ＝ 一个 chrome 视图（标签栏、弹层、内页；透明，叠最上）＋ 每个游戏标签一个 WebContentsView（各自会话分区）。
 // chrome 视图平时只占标题栏那一条，弹层／对话框／内页打开时盖满整窗（引擎通过 cover 报）。
 type WebSheet = { view: any; provider: string; close: (reason: string) => void };
-type TabRecord = { id: number; shownOnce?: boolean; webSheet?: WebSheet | null; owner: WinRecord; view: any; contents: any; slot: number; entryId: string; pendingCredential: any; loginProvider: string | null; loginRequest: number; loginStartedFor?: number; loginNavigation?: Promise<void> | null; loginBridgeReady?: boolean; loginBegin?: (() => void) | null; loginSeen: string; loginRetries: number; qrModel?: QrMsg | null; preferredAccount: string; lastAccount: string; muted: boolean; nick: string; uid: string };
+type TabRecord = { id: number; shownOnce?: boolean; webSheet?: WebSheet | null; webOpenSeq?: number; owner: WinRecord; view: any; contents: any; slot: number; entryId: string; pendingCredential: any; loginProvider: string | null; loginRequest: number; loginStartedFor?: number; loginNavigation?: Promise<void> | null; loginBridgeReady?: boolean; loginBegin?: (() => void) | null; loginSeen: string; loginRetries: number; qrModel?: QrMsg | null; preferredAccount: string; lastAccount: string; muted: boolean; nick: string; uid: string };
 /* 扫码卡最后一次画的样子：拖到别的窗口时按它原样重开（审计 C4） */
 type QrMsg = { provider: string; stage: string; qr: string; text: string; code?: string; retry?: number };
 type WinRecord = { win: any; chrome: any; chromeContents: any; tabs: Map<number, TabRecord>; order: number[]; cur: number | null; curKind: string; overlays: any; covered: boolean; chromeKeys?: boolean; closing: boolean; ready: boolean; chromeKey?: string; viewKey?: string; pendingAdopt?: TabRecord | null; pageKind?: string | null; follow?: ReturnType<typeof setInterval> | null; active?: TabRecord | null; merged?: boolean; leaving?: TabRecord | null; leavingTimer?: ReturnType<typeof setTimeout> | null };
@@ -134,7 +136,7 @@ export = function startMicroClient(config) {
       const evidence = loginRecorder.takeEvidence();
       if (evidence.length) setImmediate(() => log('login-evidence', JSON.stringify(evidence)));
     }
-    logBuffer += `[${new Date().toISOString()}] ${args.join(' ')}\n`;
+    logBuffer += `[${new Date().toISOString()}] ${login_recorder_.redactText(args.join(' '))}\n`;
     /* 登录流程与导航这几类行同步落盘：主进程段错误时 300ms 缓冲里的最后几行会丢，而那正是要看的 */
     const head = String(args[0] || '');
     if (head.startsWith('login-trace') || head === 'will-navigate' || head === 'did-start-loading' || head.startsWith('chrome-')) { flushLog(true); return; }
@@ -163,8 +165,15 @@ export = function startMicroClient(config) {
   // 做法：容器里静态资源的 GET 子资源请求（已知资源主机＋资源后缀）由 webRequest 重定向到 jnd-asset://，处理器用默认 session 的 net.fetch 取——
   // 默认 session 的 HTTP 缓存就是所有容器共享的资源缓存；页面、接口、websocket 一概不碰。JND_NO_SHARED_CACHE=1 关掉做对照。
   const ASSET_HOSTS = /(^|\.)(sanguosha\.com|yokaverse\.com|4399ytzg2\.com|4399iw\d*\.com|iwan4399\.com)$/i;
-  const ASSET_EXT = /\.(?:js|css|json|png|jpe?g|webp|gif|svg|atlas|sgs|bin|wasm|mp3|ogg|wav|m4a|ttf|otf|woff2?|fnt|ani|sk|skel|plist|txt|lh|ls|lmat|lm|lani|lav|ltc|lsani|ktx|pvr|astc|mp4)$/i;
-  const ASSET_TYPES = new Set(['script', 'image', 'xhr', 'fetch', 'media', 'font', 'stylesheet', 'other']);
+  // Keep game scripts on their original HTTPS origin. The official Laya loader
+  // starts libs/workerloader.js with new Worker(); Chromium rejects cross-origin
+  // worker redirects, and this loader has no worker.onerror recovery. A script tag
+  // loading successfully does not validate the same URL when used as a worker.
+  // Exclude both .js URLs and the "script" resource type; excluding the type alone
+  // is insufficient because Electron can classify worker requests as "other".
+  // The separate landing-document exception below preserves its local script load.
+  const ASSET_EXT = /\.(?:css|json|png|jpe?g|webp|gif|svg|atlas|sgs|bin|wasm|mp3|ogg|wav|m4a|ttf|otf|woff2?|fnt|ani|sk|skel|plist|txt|lh|ls|lmat|lm|lani|lav|ltc|lsani|ktx|pvr|astc|mp4)$/i;
+  const ASSET_TYPES = new Set(['image', 'xhr', 'fetch', 'media', 'font', 'stylesheet', 'other']);
   const SHARED_CACHE = process.env.JND_NO_SHARED_CACHE !== '1';
   function isSharedAsset(url: URL) {
     if (!ASSET_HOSTS.test(url.hostname)) return false;
@@ -178,9 +187,13 @@ export = function startMicroClient(config) {
     session.webRequest.onBeforeRequest({ urls: ['https://*/*'] }, (details, callback) => {
       if (LOGIN_API.test(details.url)) { loginStarted.set(details.id, Date.now()); callback({}); return; }
       if (/\/img\/10th_tmp\/yjcm_n_ban\.png$/i.test(details.url)) { callback({ cancel: true }); return; } /* 落地页下载广告条的图：根本不加载（作者 10-20） */
-      if (!SHARED_CACHE || details.method !== 'GET' || !ASSET_TYPES.has(String(details.resourceType))) { callback({}); return; }
+      if (!SHARED_CACHE || details.method !== 'GET') { callback({}); return; }
+      const localDocumentScript = details.resourceType === 'script' && Boolean(landingPack && (
+        landingPack.isDocumentScript(details.url, details.frame?.url || '') ||
+        landingPack.isDocumentScript(details.url, details.referrer || '')
+      ));
       let url = null; try { url = new URL(details.url); } catch (_) {}
-      if (!url || !isSharedAsset(url)) { callback({}); return; }
+      if (!localDocumentScript && (!url || !ASSET_TYPES.has(String(details.resourceType)) || !isSharedAsset(url))) { callback({}); return; }
       /* 来源页随重定向带过去：jnd-asset 请求上的 Referer／referrer 不可靠（实测首个标签的背景视频请求拿不到），而官方 CDN 防盗链缺它就拒 */
       let from = details.referrer || ''; try { if (!from && details.frame?.url) from = new URL(details.frame.url).origin + '/'; } catch (_) {}
       callback({ redirectURL: `jnd-asset://shared/${encodeURIComponent(details.url)}${from ? `?from=${encodeURIComponent(from)}` : ''}` });
@@ -699,10 +712,11 @@ export = function startMicroClient(config) {
     const tab = record.tabs.get(id);
     if (!tab || kind !== 'game' || tab.contents.isDestroyed()) return;
     const settle = () => {
-      if (record.cur !== id || tab.contents.isDestroyed()) return;
+      if (record.closing || record.win.isDestroyed() || record.cur !== id || record.curKind !== 'game'
+        || record.tabs.get(id) !== tab || tab.owner !== record || tab.contents.isDestroyed()) return;
       raiseTab(record, tab); record.active = tab; dropLeaving(record);
       for (const [, other] of record.tabs) if (other !== tab && !other.contents.isDestroyed()) { try { other.view.setVisible(false); } catch (_) {} }
-      tab.contents.focus(); pushTabState(record, tab);
+      restoreWindowFocus(record); pushTabState(record, tab);
     };
     if (record.active === tab) { settle(); return; }
     try { tab.view.setVisible(true); } catch (_) {}
@@ -775,6 +789,7 @@ export = function startMicroClient(config) {
     if (card && tab.loginProvider) chromeSend(record, 'jnd-chrome-qr', { action: 'open', id, ...card }); /* 新窗口按新编号原样重开（审计 C4） */
     else tab.qrModel = null;
     record.win.contentView.addChildView(tab.view, 0);
+    registerTaskWindow(record);
     const { width, height } = record.win.getContentBounds(); tab.view.setBounds(viewportBounds(width, height, record.win.isFullScreen())); try { tab.view.setVisible(true); } catch (_) {}
     pushTabState(record, tab);
     return true;
@@ -855,11 +870,11 @@ export = function startMicroClient(config) {
   // 完成就收起浮层，把结果交给统一登录器接着换取（扫码卡回到「账号校验中」）。中途关掉只收浮层，扫码卡照旧。日志只记方式与原因，不记地址和值。
   const WEB_TITLES: Record<string, string> = { steam: 'Steam 账号登录', oppo: 'OPPO 账号登录', vivo: 'vivo 账号登录', xiaomi: '小米账号登录', qq: 'QQ 账号登录', huawei: '华为账号登录', honor: '荣耀账号登录' };
   const WEB_WIDTH: Record<string, number> = { huawei: 880, honor: 880 }; /* 华为、荣耀账号页是宽屏两栏，440 装不下（实测） */
-  const webUrlWaiters = new Map<number, (m: any) => void>(); let webUrlSeq = 0;
+  const webUrlWaiters = new Map<number, { sender: any; done: (m: any) => void }>(); let webUrlSeq = 0;
   function requestWebURL(tab: TabRecord, provider: string): Promise<{ url: string; error?: string }> {
     return new Promise(resolve => {
       const reqId = ++webUrlSeq; const timer = setTimeout(() => { webUrlWaiters.delete(reqId); resolve({ url: '', error: 'BRIDGE_TIMEOUT' }); }, 4000);
-      webUrlWaiters.set(reqId, m => { clearTimeout(timer); resolve({ url: String(m?.url || ''), error: String(m?.error || '') }); });
+      webUrlWaiters.set(reqId, { sender: tab.contents, done: m => { clearTimeout(timer); resolve({ url: String(m?.url || ''), error: String(m?.error || '') }); } });
       try { tab.contents.send('jnd-login-web-url', { provider, reqId }); } catch (_) { clearTimeout(timer); webUrlWaiters.delete(reqId); resolve({ url: '', error: 'SEND_FAILED' }); }
     });
   }
@@ -869,7 +884,7 @@ export = function startMicroClient(config) {
     /* QQ：登录完跳中转页（imgcache…/proxy.htm）或 auth://tauth.qq.com/；华为：com.huawei.apps.<id>:/oauth2redirect；荣耀：hms://redirect_url。后两者是 App 回调，系统不会打开（外部唤起已拒），这里截下 */
     if (provider === 'qq') return (u.origin === 'https://imgcache.qq.com' && u.pathname === '/open/connect/widget/mobile/login/proxy.htm') || (u.protocol === 'auth:' && u.host === 'tauth.qq.com') ? { href: u.href } : null;
     if (provider === 'huawei') return u.protocol === 'com.huawei.apps.111830943:' && u.pathname === '/oauth2redirect' && /[?&]code=/.test(u.search) ? { href: u.href } : null;
-    if (provider === 'honor') return raw.startsWith('hms://redirect_url') && /[?&]code=/.test(raw) ? { href: raw } : null;
+    if (provider === 'honor') return u.protocol === 'hms:' && u.host === 'redirect_url' && u.pathname === '' && /[?&]code=/.test(raw) ? { href: raw } : null;
     /* 小米：跳 game.xiaomi.com 回调带 code（http） */
     if (provider === 'xiaomi') return u.origin === 'http://game.xiaomi.com' && u.pathname === '/oauthcallback/mioauth' && u.searchParams.get('code') ? { href: u.href } : null;
     if (provider === 'oppo') {
@@ -884,7 +899,9 @@ export = function startMicroClient(config) {
   async function openWebSheet(record: WinRecord, tab: TabRecord) {
     const provider = String(tab.loginProvider || '');
     if (!WEB_TITLES[provider] || tab.webSheet || tab.contents.isDestroyed()) return;
+    const loginRequest = tab.loginRequest, openSeq = tab.webOpenSeq = (tab.webOpenSeq || 0) + 1;
     const { url, error } = await requestWebURL(tab, provider);
+    if (tab.webOpenSeq !== openSeq || tab.owner !== record || record.closing || tab.loginProvider !== provider || tab.loginRequest !== loginRequest) return;
     if (!url || !/^https:\/\//.test(url) || tab.webSheet || tab.contents.isDestroyed()) { log('login-trace web open failed slot=', tab.slot, provider, error || 'no-url'); return; }
     const ses = tab.contents.session;
     const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } });
@@ -913,12 +930,12 @@ export = function startMicroClient(config) {
       if (!wc.isDestroyed()) wc.close({ waitForBeforeUnload: false });
       chromeSend(record, 'jnd-chrome-websheet', { action: 'close', id: tab.id });
       log('login-trace web close slot=', tab.slot, provider, 'reason=', reason);
-      if (reason !== 'done' && !tab.contents.isDestroyed()) try { tab.contents.focus(); } catch (_) {}
+      if (reason !== 'done') restoreWindowFocus(tab.owner);
     };
     const finish = (payload: Record<string, string>) => {
       if (done) return; done = true;
       close('done');
-      if (tab.contents.isDestroyed() || tab.loginProvider !== provider) return;
+      if (tab.contents.isDestroyed() || tab.loginProvider !== provider || tab.loginRequest !== loginRequest || tab.owner !== record) return;
       const requestId = ++tab.loginRequest; tab.loginStartedFor = requestId; tab.loginSeen = 'exchanging'; tab.loginRetries = 0;
       log('login-trace web finish slot=', tab.slot, provider);
       qrUpdate(tab, { provider: providerById(provider)?.label || '', stage: 'exchanging', qr: '', text: '' });
@@ -1068,6 +1085,31 @@ export = function startMicroClient(config) {
   const pushPlugins = () => broadcast('jnd-chrome-data', 'plugins', pluginRows());
 
   // ===== 窗口 =====
+  // Electron 33 Windows: setParentWindow(null) clears the native HWND owner;
+  // setSkipTaskbar(false) calls ITaskbarList::AddTab for this HWND. Keep the shared
+  // AppUserModelID (taskbar grouping), but register every detached top-level window.
+  function registerTaskWindow(record: WinRecord) {
+    const { win } = record;
+    if (process.platform !== 'win32' || record.closing || win.isDestroyed()) return;
+    try {
+      win.setParentWindow(null);
+      win.setSkipTaskbar(false);
+      log('window-shell registration requested id=', win.id, 'visible=', win.isVisible(), 'focusable=', win.isFocusable());
+    } catch (error) { log('window-shell registration failed id=', win.id, 'code=', error?.code || 'WINDOW_REGISTRATION_FAILED'); }
+  }
+  // WebContents.focus() can activate its native window on Windows. Delayed view
+  // updates may change the keyboard target only while that window is foreground.
+  function focusContents(record: WinRecord, contents: any) {
+    if (record.closing || record.win.isDestroyed() || !record.win.isVisible() || !record.win.isFocused()
+      || !contents || contents.isDestroyed()) return;
+    try { if (!contents.isFocused()) contents.focus(); } catch (_) {}
+  }
+  function restoreWindowFocus(record: WinRecord) {
+    const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
+    const contents = record.chromeKeys || record.curKind !== 'game'
+      ? record.chromeContents : tab?.webSheet?.view.webContents || tab?.contents;
+    focusContents(record, contents);
+  }
   function createWindow(options: { adopt?: TabRecord; pageKind?: string; bounds?: { x: number; y: number; width: number; height: number } } = {}) {
     const iconPath = path.join(__dirname, '..', channel.id, 'build', 'icon.ico');
     const iconPng = path.join(__dirname, 'icon-256.png');
@@ -1092,6 +1134,8 @@ export = function startMicroClient(config) {
       /* Windows：标题栏连同右上三键都由 chrome 视图自绘。macOS（作者 10-21）：保留系统红绿灯，标题栏其余部分仍自绘 */
       ...(IS_MAC ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { ...MAC_LIGHTS } } : { frame: false }),
       autoHideMenuBar: true,
+      focusable: true,
+      skipTaskbar: false,
       show: true,
       backgroundColor: BAR_COLOR,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -1104,6 +1148,8 @@ export = function startMicroClient(config) {
     const overlays = createOverlays({ WebContentsView, ipcMain, win, titleHeight: TITLE_HEIGHT, log });
     const record: WinRecord = { win, chrome, chromeContents: chrome.webContents, tabs: new Map(), order: [], cur: null, curKind: 'game', overlays, covered: false, closing: false, ready: false, pendingAdopt: options.adopt || null, pageKind: options.pageKind || null, follow: null, active: null };
     windows.set(win, record);
+    registerTaskWindow(record);
+    win.on('show', () => registerTaskWindow(record));
     win.contentView.addChildView(chrome);
     chrome.webContents.on('will-navigate', event => event.preventDefault());
     chrome.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -1128,7 +1174,7 @@ export = function startMicroClient(config) {
     // 叠层视图预热：首次扫码／保存密码不再等渲染进程启动。
     /* 扫码卡已改由 chrome 引擎画；popup-window 的 qr 叠层停用不删 */
     const windowState = () => chromeSend(record, 'jnd-chrome-window-state', { maximized: win.isMaximized(), focused: win.isFocused(), fullscreen: win.isFullScreen() });
-    win.on('focus', windowState); win.on('blur', windowState);
+    win.on('focus', () => { windowState(); restoreWindowFocus(record); }); win.on('blur', windowState);
     const memTimer = setInterval(() => { for (const [, tab] of record.tabs) pushTabState(record, tab); }, 15000);
     win.once('closed', () => clearInterval(memTimer));
     win.on('maximize', () => { windowState(); relayout(); }); win.on('unmaximize', () => { windowState(); relayout(); });
@@ -1138,7 +1184,7 @@ export = function startMicroClient(config) {
       /* 进全屏后键盘焦点可能落在外框文档上（Mac 点绿灯）：留痕，并在没有弹层时交给当前游戏画面 */
       const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
       log('fullscreen enter focus=', win.webContents.isFocused() ? 'frame' : record.chromeContents.isFocused() ? 'chrome' : tab && !tab.contents.isDestroyed() && tab.contents.isFocused() ? 'game' : 'none', 'covered=', record.covered);
-      if (!record.covered && tab && record.curKind === 'game' && !tab.contents.isDestroyed()) tab.contents.focus();
+      if (!record.covered && tab && record.curKind === 'game') restoreWindowFocus(record);
     });
     win.on('leave-full-screen', () => { log('fullscreen leave'); windowState(); relayout(); });
     /* 全屏时 Esc 退出：键落在哪个 webContents 都接住（作者 10-21：只挂在游戏画面上，Mac 实机按 Esc 无响应）；chrome 盖着时 Esc 归对话框／菜单／扫码卡 */
@@ -1154,6 +1200,7 @@ export = function startMicroClient(config) {
         chromeSend(record, 'jnd-chrome-close-request');
         return;
       }
+      if (process.platform === 'win32') try { win.setSkipTaskbar(true); } catch (_) {}
       try { if (win.isVisible()) win.hide(); } catch (_) {} /* 系统关闭（红点／Cmd+W／退出）同样先藏起来 */
       if (record.merged || (record.tabs.size === 0 && record.pageKind)) return; // 标签并到别的窗口去了／只有内页的窗口：不改记忆
       // 记住标签（恢复上次打开的账号）与窗口尺寸
@@ -1336,8 +1383,8 @@ export = function startMicroClient(config) {
       const wasKeys = Boolean(record.chromeKeys); record.chromeKeys = chromeKeys;
       const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
       try {
-        if (chromeKeys && !wasKeys) record.chromeContents.focus();
-        else if (!chromeKeys && (wasKeys || (!covered && record.chromeContents.isFocused())) && tab && record.curKind === 'game' && !tab.contents.isDestroyed()) tab.contents.focus();
+        if (chromeKeys && !wasKeys) restoreWindowFocus(record);
+        else if (!chromeKeys && (wasKeys || (!covered && record.chromeContents.isFocused())) && tab && record.curKind === 'game') restoreWindowFocus(record);
       } catch (_) {}
     });
     ipcMain.on('jnd-chrome-save-result', (_event, r) => {
@@ -1569,13 +1616,13 @@ export = function startMicroClient(config) {
       if (!record || !sheet) return;
       const rect = { x: Math.round(Number(m.x)), y: Math.round(Number(m.y)), width: Math.round(Number(m.w)), height: Math.round(Number(m.h)) };
       if (!(rect.width > 0 && rect.height > 0)) return;
-      try { sheet.view.setBounds(rect); record.win.contentView.addChildView(sheet.view); sheet.view.setVisible(true); sheet.view.webContents.focus(); } catch (_) {}
+      try { sheet.view.setBounds(rect); record.win.contentView.addChildView(sheet.view); sheet.view.setVisible(true); if (record.cur === tab.id) restoreWindowFocus(record); } catch (_) {}
     });
     ipcMain.on('jnd-chrome-websheet-close', (event, m) => {
       const record = [...windows.values()].find(r => r.chrome.webContents === event.sender);
       record?.tabs.get(Number(m?.id))?.webSheet?.close('user');
     });
-    ipcMain.on('jnd-login-web-url-result', (_event, m) => { const done = webUrlWaiters.get(Number(m?.reqId)); if (done) { webUrlWaiters.delete(Number(m.reqId)); done(m); } });
+    ipcMain.on('jnd-login-web-url-result', (event, m) => { const waiter = webUrlWaiters.get(Number(m?.reqId)); if (waiter?.sender === event.sender) { webUrlWaiters.delete(Number(m.reqId)); waiter.done(m); } });
     /* 账号下拉里的「管理密码」→ 打开「账号」内页 */
     ipcMain.on('jnd-open-page', (event, kind) => { const found = tabOf(event.sender); if (found && ['pm', 'settings', 'update', 'about'].includes(String(kind))) chromeSend(found.record, 'jnd-chrome-command', String(kind)); });
 
@@ -1653,7 +1700,9 @@ export = function startMicroClient(config) {
         return { id: component.id, seedPath, seedVersion };
       }),
     });
-    gmHost = createGmRequestHost({ log, net, trace: e => loginRecorder?.gm(e) });
+    gmHost = createGmRequestHost({ log, net, isolatedSession: index => electron_.session.fromPartition(`jnd-gm-${process.pid}-${index}`, { cache: false }), trace: e => loginRecorder?.gm(e),
+      steamDirect: createSteamDirectConnector({ log, cacheFile: path.join(app.getPath('userData'), 'steam-direct-addresses.json'),
+        resolveProxy: url => electron_.session.defaultSession.resolveProxy(url) }) });
     shellUpdateHost = createShellUpdateHost({
       log, net,
       shellVersion: channel.shellVersion,

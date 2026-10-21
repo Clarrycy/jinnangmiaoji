@@ -12,7 +12,7 @@ function redactUrl(raw) {
   }
 }
 function redactText(text) {
-  return String(text).replace(/https?:\/\/[^\s"'<>]+/g, (m) => redactUrl(m)).replace(/data:[^\s"']{40,}/g, (m) => `<data:${m.length}>`);
+  return String(text).replace(/[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'<>]+/gi, (m) => redactUrl(m)).replace(/data:[^\s"']{40,}/g, (m) => `<data:${m.length}>`);
 }
 function safeText(v) {
   if (/[\u4e00-\u9fff]/.test(v)) return !/[A-Za-z0-9+/=_-]{12,}/.test(v);

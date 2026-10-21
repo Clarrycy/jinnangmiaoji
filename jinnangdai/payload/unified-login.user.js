@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         统一登录器
 // @namespace    jinnangdai.wegame.standalone
-// @version      1.0.8
+// @version      1.0.10
 // @match        https://web.sanguosha.com/login/index.html*
 // @match        https://web.sanguosha.com/10/pc/index.php*
 // @match        https://web.sanguosha.com/10/pc/bilibiliWD_index.php*
@@ -72,7 +72,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '1.0.8';
+  const VERSION = '1.0.9';
   const ORIGIN = 'https://web.sanguosha.com';
   const SESSION_KEY = 'wegame.qq.session.v1';
   const HANDOFF_KEY = 'wegame.qq.handoff.v1';
@@ -2315,7 +2315,8 @@
     }
     if (r.steam) a.steam = validateSteamAuth(r.steam);
     if (r.steamWeb) {
-      fields(r.steamWeb, ['refresh_token', 'steamID', 'sessionid'], 'steam_restore');
+      fields(r.steamWeb, ['refresh_token', 'steamID'], 'steam_restore');
+      assert((r.steamWeb.sessionid === '' && !r.steamWeb.finalized) || /^[a-f0-9]{24,64}$/.test(r.steamWeb.sessionid), 'STEAM_SESSION_COOKIE_UNAVAILABLE', 'steam_restore');
       assert(/^\d{17}$/.test(r.steamWeb.steamID), 'STEAM_ACCOUNT_INVALID', 'steam_restore');
       a.steamWeb = r.steamWeb;
     }
@@ -2388,8 +2389,8 @@
     } else assert(params.action === 'steam_openid_login', 'STEAM_OAUTH_FORM_SCHEMA_CHANGED', 'steam_oauth');
     return params;
   }
-  async function prepareSteam(a) {
-    // Verify redirect visibility BEFORE asking for the single user scan.
+  async function prepareSteamSession(a) {
+    // Community setup is deferred until after QR authorization; it is still mandatory.
     const initial = await steamRequest(a, 'steam_preflight', steamOAuthURL(a.state), undefined, true);
     const redirect = responseHeader(initial.responseHeaders, 'location');
     assert(redirect && initial.status >= 300, 'STEAM_REDIRECT_UNAVAILABLE', 'steam_preflight');
@@ -2415,8 +2416,21 @@
     }
     assert(sid && /^[a-f0-9]{24,64}$/.test(sid), 'STEAM_SESSION_COOKIE_UNAVAILABLE', 'steam_preflight');
     a.steamSessionID = sid;
-    a.steamChallenge = await steamAPI(a, 'BeginAuthSessionViaQR',
-      {device_details: {device_friendly_name: navigator.userAgent, platform_type: 2}, website_id: 'Community'}, 'steam_qr');
+  }
+  async function prepareSteam(a) {
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      active(a);
+      try {
+        a.steamChallenge = await steamAPI(a, 'BeginAuthSessionViaQR',
+          {device_details: {device_friendly_name: navigator.userAgent, platform_type: 2}, website_id: 'Community'}, 'steam_qr');
+        break;
+      } catch (error) {
+        active(a);
+        if (!['NETWORK_ERROR', 'REQUEST_TIMEOUT'].includes(error.message) || attempt === 4) throw error;
+        console.info('[统一登录器]', JSON.stringify({stage: 'steam_qr_retry', attempt, maxAttempts: 4, code: error.message}));
+        await sleep(attempt * 1000);
+      }
+    }
     fields(a.steamChallenge, ['client_id', 'request_id', 'challenge_url'], 'steam_qr');
     assert(/^\d+$/.test(a.steamChallenge.client_id) && Number(a.steamChallenge.interval) > 0 &&
       Number(a.steamChallenge.interval) <= 30, 'STEAM_QR_SCHEMA_CHANGED', 'steam_qr');
@@ -2424,16 +2438,24 @@
   }
   async function waitForSteam(a) {
     prefetchEntryArtwork(a);
+    let transientFailures = 0;
     while (!a.steamWeb) {
       await sleep(Math.max(1000, Number(a.steamChallenge.interval) * 1000)); active(a);
-      const r = await steamAPI(a, 'PollAuthSessionStatus',
-        {client_id: a.steamChallenge.client_id, request_id: a.steamChallenge.request_id}, 'steam_poll');
+      let r;
+      try {
+        r = await steamAPI(a, 'PollAuthSessionStatus',
+          {client_id: a.steamChallenge.client_id, request_id: a.steamChallenge.request_id}, 'steam_poll');
+        transientFailures = 0;
+      } catch (error) {
+        if (['NETWORK_ERROR', 'REQUEST_TIMEOUT'].includes(error.message) && ++transientFailures <= 3 && Date.now() < a.expires) continue;
+        throw error;
+      }
       if (r.refresh_token) {
         const {refresh_token, access_token} = fields(r, ['refresh_token', 'access_token'], 'steam_poll');
         // Parsing is only for correlation; server verification remains mandatory.
         const token = steamJWTPayload(access_token);
         assert(/^\d{17}$/.test(token.sub) && Number(token.exp) * 1000 > Date.now(), 'STEAM_ACCOUNT_INVALID', 'steam_poll');
-        a.steamWeb = {refresh_token, steamID: token.sub, sessionid: a.steamSessionID};
+        a.steamWeb = {refresh_token, steamID: token.sub, sessionid: a.steamSessionID || ''};
         a.expires = Date.now() + 1800000;
         steamCheckpoint(a); hideQR(a); delete a.steamChallenge;
         return;
@@ -2448,6 +2470,11 @@
   }
   async function authorizeSteam(a) {
     const w = a.steamWeb;
+    if (!w.finalized && !w.sessionid) {
+      await prepareSteamSession(a);
+      w.sessionid = a.steamSessionID;
+      steamCheckpoint(a);
+    }
     if (!w.finalized) {
       const r = await steamRequest(a, 'steam_finalize', 'https://login.steampowered.com/jwt/finalizelogin',
         {nonce: w.refresh_token, sessionid: w.sessionid, redir: steamOAuthURL(a.state)});
@@ -3564,6 +3591,12 @@
   const HONOR_WEB_CALLBACK = 'hms://redirect_url';
   const WEB_PROVIDERS = new Set(['steam', 'oppo', 'vivo', 'xiaomi', 'qq', 'huawei', 'honor']);
   const webStates = new Map();
+  let webDeadline = 0;
+  function takeWebState(provider) {
+    const state = webStates.get(provider); webStates.delete(provider);
+    assert(state && Date.now() < webDeadline, 'WEB_RESULT_INVALID', provider + '_web');
+    return state;
+  }
   // 只为拿 QQ 电脑版登录页地址发一次请求：不挂在扫码尝试上（出错后尝试可能已清掉），只允许 QQ 域名
   function webFetchText(url, hosts) {
     parseURL(url, hosts, 'web_login');
@@ -3577,6 +3610,7 @@
   }
   async function webURL(provider) {
     assert(WEB_PROVIDERS.has(provider), 'PROVIDER_UNAVAILABLE', 'web_login');
+    webStates.clear(); webDeadline = Date.now() + 10 * 60 * 1000;
     // QQ：openmobile 授权页本身是手机页（会唤起手机 QQ）；取它内嵌的 ptlogin 登录页，关掉强制二维码＝账号密码登录。h5sig 不覆盖 force_qr（实测）
     if (provider === 'qq') {
       const state = random(); webStates.set('qq', state);
@@ -3628,25 +3662,25 @@
       const u = parseURL(String(web.href || ''), new Set(['10th-ly-login.sanguosha.com']), stage);
       assert(u.pathname === '/steam/oauth/callback.html', 'WEB_RESULT_INVALID', stage);
       const p = uniqueParams(u.hash.slice(1), stage);
-      assert(p.state && p.state === webStates.get('steam'), 'STEAM_STATE_MISMATCH', stage); webStates.delete('steam');
+      assert(p.state && p.state === takeWebState('steam'), 'STEAM_STATE_MISMATCH', stage);
       const {access_token} = fields(p, ['access_token'], stage);
       const seconds = Number(p.expires_in) || 0;
       assert(seconds >= 0 && seconds < 1e10, 'STEAM_TOKEN_SCHEMA_CHANGED', stage);
       a.steam = {access_token, steamID: /^\d{17}$/.test(p.steamid || '') ? p.steamid : '', expires: seconds ? Date.now() + seconds * 1000 : 0,
         retainedUntil: Date.now() + 86400000, web: true};
     } else if (provider === 'xiaomi' || provider === 'qq' || provider === 'honor') {
-      const state = webStates.get(provider); assert(state, 'WEB_RESULT_INVALID', stage); webStates.delete(provider);
+      const state = takeWebState(provider);
       a.state = state; const href = String(web.href || '');
       if (provider === 'xiaomi') a.xiaomiCode = xiaomiCallback(a, href);
       else if (provider === 'honor') {
         let u; try { u = new URL(href); } catch (_) { throw failure('WEB_RESULT_INVALID', stage); }
-        assert(u.href.startsWith(HONOR_WEB_CALLBACK), 'WEB_RESULT_INVALID', stage);
+        assert(u.protocol === 'hms:' && u.host === 'redirect_url' && u.pathname === '' && !u.username && !u.password && !u.hash, 'WEB_RESULT_INVALID', stage);
         const p = uniqueParams(u.search.slice(1), stage); assert(p.state === state && !p.error, 'HONOR_STATE_MISMATCH', stage);
         a.honor = {webCode: fields(p, ['code'], stage).code};
       } else if (isProxy(href)) a.redirect = href; /* QQ 中转页：交给 redeem 取回调 */
       else a.qq = callback(a, href); /* QQ auth://tauth.qq.com/ 回调：带 openid、access_token，对 state */
     } else if (provider === 'huawei') {
-      const w = webStates.get('huawei'); assert(w, 'WEB_RESULT_INVALID', stage); webStates.delete('huawei');
+      const w = takeWebState('huawei');
       a.state = w.state; a.huawei = {verifier: w.verifier, nonce: w.nonce, webCallback: String(web.href || '')};
     } else if (provider === 'oppo') {
       const code = String(web.code || '');
