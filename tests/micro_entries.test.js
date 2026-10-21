@@ -13,8 +13,16 @@ assert.deepEqual(PROVIDERS.filter(provider => provider.mode === 'browser').map(p
 for (const provider of PROVIDERS) {
   assert.match(provider.provider, /^(?:qq|wx|bilibili|steam|oppo|xiaomi|vivo|huawei|honor)$/, provider.id);
   assert(provider.brand, `${provider.id} must expose a brand`);
+  assert(provider.group, `${provider.id} must expose a menu group`);
+  assert(!/[（(]/.test(provider.label), `${provider.id} menu label stays short`);
   if (provider.mode === 'browser') assert.match(provider.page, /^https:\/\//, provider.id);
 }
+assert.deepEqual([...new Set(PROVIDERS.map(provider => provider.group))],
+  ['WeGame 登录', '哔哩哔哩登录', 'Steam 登录', 'OPPO 登录', '小米登录', 'VIVO 登录', '华为登录', '荣耀登录']);
+assert.deepEqual(PROVIDERS.filter(provider => provider.group === '小米登录').map(provider => provider.label),
+  ['小米扫码登录', '小米官方登录'], '扫码与官方登录同属小米登录分组');
+assert.deepEqual(PROVIDERS.filter(provider => provider.group === 'Steam 登录').map(provider => provider.label),
+  ['Steam 扫码登录', 'Steam 官方登录']);
 for (const entry of ENTRIES) assert.match(entry.entry, /^https:\/\//, entry.id);
 assert.equal(entryById('guanfu').verified, true);
 assert.equal(entryById('baidu').verified, false, 'unverified entries stay flagged until checked live');
@@ -23,7 +31,8 @@ assert.equal(providerById('bilibili')?.label, 'bilibili 扫码登录', 'bilibili
 assert.deepEqual(PROVIDERS.filter(p => p.mode === 'qr').map(p => p.id), ['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor'], '扫码登录顺序与统一登录器菜单一致');
 assert.equal(providerById('xiaomi')?.provider, 'xiaomi');
 assert.equal(providerById('xiaomi-web')?.provider, 'xiaomi', '官方网页登录仍复用统一登录器的小米链路');
-assert.equal(providerByLabel('小米官方登录（账号密码 / 短信）')?.id, 'xiaomi-web');
+assert.equal(providerByLabel('小米官方登录')?.id, 'xiaomi-web');
+assert.equal(providerByLabel('小米扫码登录')?.id, 'xiaomi');
 const url = value => new URL(value);
 assert.equal(matchesAnyEntry(url('https://web.sanguosha.com/x/pc/index.php')), true);
 assert.equal(matchesAnyEntry(url('https://game.4399iw2.com/yxxsgs/index.php')), true);

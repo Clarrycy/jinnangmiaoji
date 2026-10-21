@@ -6,8 +6,18 @@ const qrcodegen = require("qrcode-generator");
 function mountChrome(opts) {
   const { S, ICON, SPEC, host } = opts;
   const ENTRIES = ["官服", "4399", "飞火", "顺网", "2144", "紫霞", "QQ 大厅", "7K7K", "百度", "360"];
-  const PROVIDERS = ["WeGame - QQ", "WeGame - 微信", "bilibili 扫码登录", "Steam 扫码登录", "OPPO 扫码登录", "小米扫码登录", "VIVO 扫码登录", "华为扫码登录", "荣耀扫码登录", "Steam 官方登录（账号密码 / Steam Guard）", "OPPO 官方登录（账号密码 / 短信 / 扫码）", "小米官方登录（账号密码 / 短信）", "VIVO 官方登录（账号密码 / 短信 / 扫码）"];
-  const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录（账号密码 / Steam Guard）": "Steam", "OPPO 官方登录（账号密码 / 短信 / 扫码）": "OPPO", "小米官方登录（账号密码 / 短信）": "小米", "VIVO 官方登录（账号密码 / 短信 / 扫码）": "VIVO" };
+  const PROVIDER_GROUPS = [
+    { label: "WeGame 登录", items: ["WeGame - QQ", "WeGame - 微信"] },
+    { label: "哔哩哔哩登录", items: ["bilibili 扫码登录"] },
+    { label: "Steam 登录", items: ["Steam 扫码登录", "Steam 官方登录"] },
+    { label: "OPPO 登录", items: ["OPPO 扫码登录", "OPPO 官方登录"] },
+    { label: "小米登录", items: ["小米扫码登录", "小米官方登录"] },
+    { label: "VIVO 登录", items: ["VIVO 扫码登录", "VIVO 官方登录"] },
+    { label: "华为登录", items: ["华为扫码登录"] },
+    { label: "荣耀登录", items: ["荣耀扫码登录"] }
+  ];
+  const PROVIDERS = PROVIDER_GROUPS.flatMap((group) => group.items);
+  const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录": "Steam", "OPPO 官方登录": "OPPO", "小米官方登录": "小米", "VIVO 官方登录": "VIVO" };
   const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
   const NICKS = ["范例玩家甲", "范例玩家乙", "范例玩家丙", "小号二", "小号三"];
   const settings = host.data.settings;
@@ -142,7 +152,7 @@ function mountChrome(opts) {
   <div class="caption"><span class="more" data-tip="菜单" data-key="Alt+F">${S.menu}<span class="dot"></span></span><span class="mn" data-tip="最小化">${S.min}</span><span class="mx" data-tip="最大化">${S.max}</span><span class="cx" data-tip="关闭" data-key="Alt+F4">${S.x}</span></div>
 </header>
 <div id="viewport"><div class="game"></div><div class="pg" hidden></div></div>
-<div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div>
+<div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div><div class="menu providermenu" hidden></div>
 <div class="amenu" hidden><div class="item" data-act="pm"><i>${S.person}</i><span>账号</span><span class="hint">Ctrl+Shift+M</span></div><div class="item" data-act="settings"><i>${S.sliders}</i><span>设置</span><span class="hint">Ctrl+Shift+S</span></div><div class="sep"></div><div class="item" data-act="update"><i>${S.update}</i><span>更新</span><i class="dot2"></i></div><div class="item" data-act="about"><i>${S.info}</i><span>关于</span></div></div>`;
   const BORN_CLIP = `polygon(0 0, 100% 0, 100% calc(100% - ${SPEC.radius}px), calc(100% + ${SPEC.radius}px) calc(100% - ${SPEC.radius}px), calc(100% + ${SPEC.radius}px) 100%, -${SPEC.radius}px 100%, -${SPEC.radius}px calc(100% - ${SPEC.radius}px), 0 calc(100% - ${SPEC.radius}px))`;
   const TAB_GAME = `<i class="pill"></i><span class="sep"></span><img class="fav" src="${ICON}" draggable="false"><span class="entry" data-tip="切换渠道服"><span class="el"></span>${S.caret}</span><span class="t"></span><span class="snd" hidden></span><span class="x" data-tip="关闭" data-key="Ctrl+W">${S.close}</span>`;
@@ -591,8 +601,8 @@ function mountChrome(opts) {
     const el = winEl(w), a = q(el, ".tab.on .entry");
     if (!a) return;
     a.classList.add("open");
-    const m = q(el, ".entrymenu"), sub = q(el, ".submenu"), r = a.getBoundingClientRect(), wr = el.getBoundingClientRect();
-    let subOpen = false;
+    const m = q(el, ".entrymenu"), sub = q(el, ".submenu"), methods = q(el, ".providermenu"), r = a.getBoundingClientRect(), wr = el.getBoundingClientRect();
+    let subOpen = false, groupOpen = t.provider ? PROVIDER_GROUPS.find((group) => group.items.includes(t.provider))?.label || null : null;
     const draw = () => {
       m.textContent = "";
       const loggedIn = () => Boolean(t.status && t.status !== "none");
@@ -632,6 +642,8 @@ function mountChrome(opts) {
       };
       m.append(other);
       sub.hidden = !subOpen;
+      methods.hidden = true;
+      methods.textContent = "";
       const pickProvider = (p, logout) => {
         t.provider = p;
         t.entry = PROVIDER_CHIP[p];
@@ -644,16 +656,37 @@ function mountChrome(opts) {
           qrPrompt({ provider: p, stage: "loading", qr: "", text: "" });
         }
       };
-      if (subOpen) {
-        sub.textContent = "";
-        for (const p of PROVIDERS) sub.append(menuItem(p, () => {
-          closeAll();
-          if (loggedIn()) dialog({ title: "切换登录方式？", body: "切换服务器会退出当前账号，确定要切换吗？", cancel: "取消", ok: "切换登录方式", onOk: () => pickProvider(p, true) });
-          else pickProvider(p, false);
-        }, { checked: t.provider === p }));
-        sub.style.left = r.left - wr.left - 8 + 176 + 2 + "px";
-        sub.style.top = r.bottom - wr.top + 2 + other.offsetTop + "px";
+      if (!subOpen) return;
+      sub.textContent = "";
+      let activeGroup = null;
+      for (const group2 of PROVIDER_GROUPS) {
+        const item = menuItem(group2.label, () => {
+          groupOpen = groupOpen === group2.label ? null : group2.label;
+          draw();
+        }, { sub: true, open: groupOpen === group2.label });
+        item.onmouseenter = () => {
+          if (groupOpen !== group2.label) {
+            groupOpen = group2.label;
+            draw();
+          }
+        };
+        sub.append(item);
+        if (groupOpen === group2.label) activeGroup = item;
       }
+      const subLeft = r.left - wr.left - 8 + 176 + 2, subTop = r.bottom - wr.top + 2 + other.offsetTop;
+      sub.style.left = subLeft + "px";
+      sub.style.top = subTop + "px";
+      const group = PROVIDER_GROUPS.find((entry) => entry.label === groupOpen);
+      if (!group || !activeGroup) return;
+      for (const p of group.items) methods.append(menuItem(p, () => {
+        closeAll();
+        if (loggedIn()) dialog({ title: "切换登录方式？", body: "切换服务器会退出当前账号，确定要切换吗？", cancel: "取消", ok: "切换登录方式", onOk: () => pickProvider(p, true) });
+        else pickProvider(p, false);
+      }, { checked: t.provider === p }));
+      methods.hidden = false;
+      const desiredLeft = subLeft + (sub.offsetWidth || 184) + 2, maxLeft = Math.max(4, wr.width - (methods.offsetWidth || 176) - 4);
+      methods.style.left = Math.min(desiredLeft, maxLeft) + "px";
+      methods.style.top = subTop + activeGroup.offsetTop + "px";
     };
     draw();
     m.hidden = false;
@@ -1214,7 +1247,7 @@ function mountChrome(opts) {
     if (qrEl) qrEl.hidden = qrYield || qrTab !== null && qrTab !== w.cur;
     if (saveEl) saveEl.hidden = saveTab !== null && saveTab !== w.cur;
   }
-  const QR_APP = { "WeGame - QQ": "QQ", "WeGame - 微信": "微信", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录（账号密码 / Steam Guard）": "Steam", "OPPO 官方登录（账号密码 / 短信 / 扫码）": "OPPO", "小米官方登录（账号密码 / 短信）": "小米", "VIVO 官方登录（账号密码 / 短信 / 扫码）": "VIVO" };
+  const QR_APP = { "WeGame - QQ": "QQ", "WeGame - 微信": "微信", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录": "Steam", "OPPO 官方登录": "OPPO", "小米官方登录": "小米", "VIVO 官方登录": "VIVO" };
   function qrTexts(m) {
     const app = m.brand || QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, "");
     const sp = /^[A-Za-z]/.test(app) ? ` ${app} ` : app;

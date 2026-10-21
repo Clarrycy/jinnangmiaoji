@@ -11,8 +11,8 @@ const BRAND_ICON = {
 };
 BRAND_ICON["WeGame - QQ"] = BRAND_ICON["WeGame"];
 BRAND_ICON["WeGame - 微信"] = BRAND_ICON["WeGame"];
-BRAND_ICON["Steam 官方登录（账号密码 / Steam Guard）"] = BRAND_ICON["Steam 扫码登录"];
-BRAND_ICON["OPPO 官方登录（账号密码 / 短信 / 扫码）"] = BRAND_ICON["OPPO 扫码登录"];
-BRAND_ICON["小米官方登录（账号密码 / 短信）"] = BRAND_ICON["小米扫码登录"];
-BRAND_ICON["VIVO 官方登录（账号密码 / 短信 / 扫码）"] = BRAND_ICON["VIVO 扫码登录"];
+BRAND_ICON["Steam 官方登录"] = BRAND_ICON["Steam 扫码登录"];
+BRAND_ICON["OPPO 官方登录"] = BRAND_ICON["OPPO 扫码登录"];
+BRAND_ICON["小米官方登录"] = BRAND_ICON["小米扫码登录"];
+BRAND_ICON["VIVO 官方登录"] = BRAND_ICON["VIVO 扫码登录"];
 module.exports = BRAND_ICON;

@@ -127,7 +127,7 @@ function chromeCss(TOKENS: any, SPEC: any): string {
     .menu .item { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 10px; border-radius: 4px; }
     .menu .item:hover { background: ${TOKENS.hover}; }
     /* 宽度是档位不是量体裁衣：图标＋动宾短语、右侧无内容的菜单取 160——文字列（40 起、4 字到 92）之后留一个与左列等宽的呼吸列；208 是右键菜单档（长短语），112 则让 hover 药丸贴着字 */
-    .pmenu { width: 160px; } .cmenu { width: 208px; } .submenu { width: 184px; } .pmenu .item { justify-content: flex-start; gap: 10px; } .pmenu .item i { width: 16px; height: 16px; display: grid; place-items: center; color: ${TOKENS.ink2}; } .pmenu .item i svg { width: 16px; height: 16px; } .pmenu .item.disabled i { color: ${TOKENS.ink3}; }
+    .pmenu { width: 160px; } .cmenu { width: 208px; } .submenu { width: 184px; } .providermenu { width: 176px; } .pmenu .item { justify-content: flex-start; gap: 10px; } .pmenu .item i { width: 16px; height: 16px; display: grid; place-items: center; color: ${TOKENS.ink2}; } .pmenu .item i svg { width: 16px; height: 16px; } .pmenu .item.disabled i { color: ${TOKENS.ink3}; }
     .menu .item.disabled { color: ${TOKENS.ink3}; } .menu .item.disabled:hover { background: transparent; }
     .menu .item.sub.open { background: ${TOKENS.hover}; }
     .menu .item.sub::after { content: ""; width: 6px; height: 6px; border-right: 1.4px solid ${TOKENS.ink3}; border-top: 1.4px solid ${TOKENS.ink3}; transform: rotate(45deg); }

@@ -43,8 +43,18 @@ function mountChrome(opts: { S: Record<string, string>; ICON: string; SPEC: any;
   const { S, ICON, SPEC, host } = opts;
 // ===== 0 常量 =====
 const ENTRIES = ['官服', '4399', '飞火', '顺网', '2144', '紫霞', 'QQ 大厅', '7K7K', '百度', '360'];
-const PROVIDERS = ['WeGame - QQ', 'WeGame - 微信', 'bilibili 扫码登录', 'Steam 扫码登录', 'OPPO 扫码登录', '小米扫码登录', 'VIVO 扫码登录', '华为扫码登录', '荣耀扫码登录', 'Steam 官方登录（账号密码 / Steam Guard）', 'OPPO 官方登录（账号密码 / 短信 / 扫码）', '小米官方登录（账号密码 / 短信）', 'VIVO 官方登录（账号密码 / 短信 / 扫码）'];
-const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀', 'Steam 官方登录（账号密码 / Steam Guard）': 'Steam', 'OPPO 官方登录（账号密码 / 短信 / 扫码）': 'OPPO', '小米官方登录（账号密码 / 短信）': '小米', 'VIVO 官方登录（账号密码 / 短信 / 扫码）': 'VIVO' };
+const PROVIDER_GROUPS = [
+  { label: 'WeGame 登录', items: ['WeGame - QQ', 'WeGame - 微信'] },
+  { label: '哔哩哔哩登录', items: ['bilibili 扫码登录'] },
+  { label: 'Steam 登录', items: ['Steam 扫码登录', 'Steam 官方登录'] },
+  { label: 'OPPO 登录', items: ['OPPO 扫码登录', 'OPPO 官方登录'] },
+  { label: '小米登录', items: ['小米扫码登录', '小米官方登录'] },
+  { label: 'VIVO 登录', items: ['VIVO 扫码登录', 'VIVO 官方登录'] },
+  { label: '华为登录', items: ['华为扫码登录'] },
+  { label: '荣耀登录', items: ['荣耀扫码登录'] },
+];
+const PROVIDERS = PROVIDER_GROUPS.flatMap(group => group.items);
+const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀', 'Steam 官方登录': 'Steam', 'OPPO 官方登录': 'OPPO', '小米官方登录': '小米', 'VIVO 官方登录': 'VIVO' };
 const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
 const NICKS = ['范例玩家甲', '范例玩家乙', '范例玩家丙', '小号二', '小号三']; /* harness 里新标签的假昵称；不要放真实玩家名 */
 const settings = host.data.settings;
@@ -122,7 +132,7 @@ const WIN_HTML = `<header>
   <div class="caption"><span class="more" data-tip="菜单" data-key="Alt+F">${S.menu}<span class="dot"></span></span><span class="mn" data-tip="最小化">${S.min}</span><span class="mx" data-tip="最大化">${S.max}</span><span class="cx" data-tip="关闭" data-key="Alt+F4">${S.x}</span></div>
 </header>
 <div id="viewport"><div class="game"></div><div class="pg" hidden></div></div>
-<div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div>
+<div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div><div class="menu providermenu" hidden></div>
 <div class="amenu" hidden><div class="item" data-act="pm"><i>${S.person}</i><span>账号</span><span class="hint">Ctrl+Shift+M</span></div><div class="item" data-act="settings"><i>${S.sliders}</i><span>设置</span><span class="hint">Ctrl+Shift+S</span></div><div class="sep"></div><div class="item" data-act="update"><i>${S.update}</i><span>更新</span><i class="dot2"></i></div><div class="item" data-act="about"><i>${S.info}</i><span>关于</span></div></div>`;
 // 新建标签生长期的裁切：内容裁在标签盒内，底部两只脚（盒外各 radius）放行，圆角与 S 形从第一帧就在
 const BORN_CLIP = `polygon(0 0, 100% 0, 100% calc(100% - ${SPEC.radius}px), calc(100% + ${SPEC.radius}px) calc(100% - ${SPEC.radius}px), calc(100% + ${SPEC.radius}px) 100%, -${SPEC.radius}px 100%, -${SPEC.radius}px calc(100% - ${SPEC.radius}px), 0 calc(100% - ${SPEC.radius}px))`;
@@ -268,7 +278,8 @@ function closeAll() { for (const p of document.querySelectorAll<HTMLElement>('.m
 function menuItem(label: string, onClick: (() => void) | null, extra: { sub?: boolean; open?: boolean; disabled?: boolean; checked?: boolean } = {}) { const d = document.createElement('div'); d.className = 'item' + (extra.sub ? ' sub' : '') + (extra.open ? ' open' : '') + (extra.disabled ? ' disabled' : ''); const txt = document.createElement('span'); txt.textContent = label; d.append(txt); if (extra.checked) { const c = document.createElement('i'); c.className = 'chk'; d.append(c); } if (onClick && !extra.disabled) d.onclick = ev => { ev.stopPropagation(); onClick(); }; return d; }
 function openEntryMenu(w: Win, t: Tab) {
   closeAll(); const el = winEl(w), a = q(el, '.tab.on .entry') as HTMLElement | null; if (!a) return; a.classList.add('open');
-  const m = q(el, '.entrymenu') as HTMLElement, sub = q(el, '.submenu') as HTMLElement, r = a.getBoundingClientRect(), wr = el.getBoundingClientRect(); let subOpen = false;
+  const m = q(el, '.entrymenu') as HTMLElement, sub = q(el, '.submenu') as HTMLElement, methods = q(el, '.providermenu') as HTMLElement, r = a.getBoundingClientRect(), wr = el.getBoundingClientRect();
+  let subOpen = false, groupOpen: string | null = t.provider ? (PROVIDER_GROUPS.find(group => group.items.includes(t.provider))?.label || null) : null;
   const draw = () => {
     m.textContent = '';
     const loggedIn = () => Boolean(t.status && t.status !== 'none');
@@ -280,8 +291,25 @@ function openEntryMenu(w: Win, t: Tab) {
     const providerAction = t.provider ? (/官方登录/.test(t.provider) ? ' 登录' : ' 扫码') : '';
     const other = menuItem(t.provider ? providerName + providerAction : '其他渠道服', () => { subOpen = !subOpen; draw(); }, { sub: true, open: subOpen }); other.onmouseenter = () => { if (!subOpen) { subOpen = true; draw(); } }; m.append(other);
     sub.hidden = !subOpen;
+    methods.hidden = true; methods.textContent = '';
     const pickProvider = (p: string, logout: boolean) => { t.provider = p; t.entry = PROVIDER_CHIP[p]; t.nick = ''; t.status = 'none'; render(w); if (host.tabs) host.tabs.provider(t, p, { logout }); else { q(el, '.game').textContent = ''; qrPrompt({ provider: p, stage: 'loading', qr: '', text: '' }); } };
-    if (subOpen) { sub.textContent = ''; for (const p of PROVIDERS) sub.append(menuItem(p, () => { closeAll(); if (loggedIn()) dialog({ title: '切换登录方式？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换登录方式', onOk: () => pickProvider(p, true) }); else pickProvider(p, false); }, { checked: t.provider === p })); sub.style.left = (r.left - wr.left - 8 + 176 + 2) + 'px'; sub.style.top = (r.bottom - wr.top + 2 + other.offsetTop) + 'px'; }
+    if (!subOpen) return;
+    sub.textContent = '';
+    let activeGroup: HTMLElement | null = null;
+    for (const group of PROVIDER_GROUPS) {
+      const item = menuItem(group.label, () => { groupOpen = groupOpen === group.label ? null : group.label; draw(); }, { sub: true, open: groupOpen === group.label });
+      item.onmouseenter = () => { if (groupOpen !== group.label) { groupOpen = group.label; draw(); } };
+      sub.append(item);
+      if (groupOpen === group.label) activeGroup = item;
+    }
+    const subLeft = r.left - wr.left - 8 + 176 + 2, subTop = r.bottom - wr.top + 2 + other.offsetTop;
+    sub.style.left = subLeft + 'px'; sub.style.top = subTop + 'px';
+    const group = PROVIDER_GROUPS.find(entry => entry.label === groupOpen);
+    if (!group || !activeGroup) return;
+    for (const p of group.items) methods.append(menuItem(p, () => { closeAll(); if (loggedIn()) dialog({ title: '切换登录方式？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换登录方式', onOk: () => pickProvider(p, true) }); else pickProvider(p, false); }, { checked: t.provider === p }));
+    methods.hidden = false;
+    const desiredLeft = subLeft + (sub.offsetWidth || 184) + 2, maxLeft = Math.max(4, wr.width - (methods.offsetWidth || 176) - 4);
+    methods.style.left = Math.min(desiredLeft, maxLeft) + 'px'; methods.style.top = (subTop + activeGroup.offsetTop) + 'px';
   };
   draw(); m.hidden = false; m.style.left = (r.left - wr.left - 8) + 'px'; m.style.top = (r.bottom - wr.top + 2) + 'px'; setCover('menu', true);
 }
@@ -443,7 +471,7 @@ type QrModel = { provider: string; brand?: string; mode?: 'qr' | 'browser'; stag
 let qrEl: HTMLElement | null = null; let qrCancelCb: (() => void) | null = null; let qrRetryCb: (() => void) | null = null; let qrTab: number | null = null; let qrYield = false;
 /* 卡片只属于一个标签：当前标签不是它的就藏起来（主进程切标签后会 render） */
 function syncCardTabs(w: Win) { if (qrEl) qrEl.hidden = qrYield || (qrTab !== null && qrTab !== w.cur); if (saveEl) saveEl.hidden = saveTab !== null && saveTab !== w.cur; }
-const QR_APP: Record<string, string> = { 'WeGame - QQ': 'QQ', 'WeGame - 微信': '微信', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀', 'Steam 官方登录（账号密码 / Steam Guard）': 'Steam', 'OPPO 官方登录（账号密码 / 短信 / 扫码）': 'OPPO', '小米官方登录（账号密码 / 短信）': '小米', 'VIVO 官方登录（账号密码 / 短信 / 扫码）': 'VIVO' };
+const QR_APP: Record<string, string> = { 'WeGame - QQ': 'QQ', 'WeGame - 微信': '微信', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀', 'Steam 官方登录': 'Steam', 'OPPO 官方登录': 'OPPO', '小米官方登录': '小米', 'VIVO 官方登录': 'VIVO' };
 function qrTexts(m: QrModel): [string, string] {
   const app = m.brand || QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, '');
   const sp = /^[A-Za-z]/.test(app) ? ` ${app} ` : app;

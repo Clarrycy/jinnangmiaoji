@@ -30,25 +30,26 @@ const ENTRIES: ReadonlyArray<Entry> = Object.freeze([
 ]);
 
 // 统一登录器的第三方登录方式。provider 是脚本 start(provider) 的 id；
-// mode=browser 的条目由壳打开渠道官方页面，账号密码／短信／Steam Guard 只输入官方窗口。
+// group 是「其他渠道服」里的一级分组；mode=browser 的条目由壳打开渠道官方页面，
+// 账号密码／短信／Steam Guard 只输入官方窗口。
 const PROVIDERS = Object.freeze([
-  Object.freeze({ id: 'qq', provider: 'qq', label: 'WeGame - QQ', mode: 'qr', brand: 'WeGame' }),
-  Object.freeze({ id: 'wx', provider: 'wx', label: 'WeGame - 微信', mode: 'qr', brand: 'WeGame' }),
-  Object.freeze({ id: 'bilibili', provider: 'bilibili', label: 'bilibili 扫码登录', mode: 'qr', brand: '哔哩哔哩' }),
-  Object.freeze({ id: 'steam', provider: 'steam', label: 'Steam 扫码登录', mode: 'qr', brand: 'Steam' }),
-  Object.freeze({ id: 'oppo', provider: 'oppo', label: 'OPPO 扫码登录', mode: 'qr', brand: 'OPPO' }),
-  Object.freeze({ id: 'xiaomi', provider: 'xiaomi', label: '小米扫码登录', mode: 'qr', brand: '小米' }),
-  Object.freeze({ id: 'vivo', provider: 'vivo', label: 'VIVO 扫码登录', mode: 'qr', brand: 'VIVO' }),
-  Object.freeze({ id: 'huawei', provider: 'huawei', label: '华为扫码登录', mode: 'qr', brand: '华为' }),
-  Object.freeze({ id: 'honor', provider: 'honor', label: '荣耀扫码登录', mode: 'qr', brand: '荣耀' }),
-  Object.freeze({ id: 'steam-web', provider: 'steam', label: 'Steam 官方登录（账号密码 / Steam Guard）', mode: 'browser', brand: 'Steam',
+  Object.freeze({ id: 'qq', provider: 'qq', label: 'WeGame - QQ', mode: 'qr', brand: 'WeGame', group: 'WeGame 登录' }),
+  Object.freeze({ id: 'wx', provider: 'wx', label: 'WeGame - 微信', mode: 'qr', brand: 'WeGame', group: 'WeGame 登录' }),
+  Object.freeze({ id: 'bilibili', provider: 'bilibili', label: 'bilibili 扫码登录', mode: 'qr', brand: '哔哩哔哩', group: '哔哩哔哩登录' }),
+  Object.freeze({ id: 'steam', provider: 'steam', label: 'Steam 扫码登录', mode: 'qr', brand: 'Steam', group: 'Steam 登录' }),
+  Object.freeze({ id: 'steam-web', provider: 'steam', label: 'Steam 官方登录', mode: 'browser', brand: 'Steam', group: 'Steam 登录',
     page: 'https://store.steampowered.com/oauth/login?mobileminimal=1&response_type=token&client_id=6730F3F4&state={state}' }),
-  Object.freeze({ id: 'oppo-web', provider: 'oppo', label: 'OPPO 官方登录（账号密码 / 短信 / 扫码）', mode: 'browser', brand: 'OPPO',
+  Object.freeze({ id: 'oppo', provider: 'oppo', label: 'OPPO 扫码登录', mode: 'qr', brand: 'OPPO', group: 'OPPO 登录' }),
+  Object.freeze({ id: 'oppo-web', provider: 'oppo', label: 'OPPO 官方登录', mode: 'browser', brand: 'OPPO', group: 'OPPO 登录',
     page: 'https://id.heytap.com/identity/web/v1/authn/auth-and-callback?bizAppKey=2CcnddQwhZJV3qjNMCzL4S&callback=https%3A%2F%2Fgame-login.heytap.com%2Fgame-union-h5%2Fh5%2Fclient-login%2Findex.html%3Fh5-next%3D1%26actId%3D90000016%26bizType%3Die&language=zh-CN&toRegisterPage=false' }),
-  Object.freeze({ id: 'xiaomi-web', provider: 'xiaomi', label: '小米官方登录（账号密码 / 短信）', mode: 'browser', brand: '小米',
+  Object.freeze({ id: 'xiaomi', provider: 'xiaomi', label: '小米扫码登录', mode: 'qr', brand: '小米', group: '小米登录' }),
+  Object.freeze({ id: 'xiaomi-web', provider: 'xiaomi', label: '小米官方登录', mode: 'browser', brand: '小米', group: '小米登录',
     page: 'https://account.xiaomi.com/oauth2/authorize?client_id=2882303761517516898&response_type=code&scope=1%203&redirect_uri=http%3A%2F%2Fgame.xiaomi.com%2Foauthcallback%2Fmioauth&state={state}&_locale=zh_CN&skip_confirm=false' }),
-  Object.freeze({ id: 'vivo-web', provider: 'vivo', label: 'VIVO 官方登录（账号密码 / 短信 / 扫码）', mode: 'browser', brand: 'VIVO',
+  Object.freeze({ id: 'vivo', provider: 'vivo', label: 'VIVO 扫码登录', mode: 'qr', brand: 'VIVO', group: 'VIVO 登录' }),
+  Object.freeze({ id: 'vivo-web', provider: 'vivo', label: 'VIVO 官方登录', mode: 'browser', brand: 'VIVO', group: 'VIVO 登录',
     page: 'https://joint.vivo.com.cn/game-subaccount-login/?from=login' }),
+  Object.freeze({ id: 'huawei', provider: 'huawei', label: '华为扫码登录', mode: 'qr', brand: '华为', group: '华为登录' }),
+  Object.freeze({ id: 'honor', provider: 'honor', label: '荣耀扫码登录', mode: 'qr', brand: '荣耀', group: '荣耀登录' }),
 ]);
 
 function entryById(id) { return ENTRIES.find(entry => entry.id === id) || null; }
