@@ -5,7 +5,7 @@ const path = require('path');
 const { ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry } = require('../core/entries');
 const { createCredentialStore } = require('../core/credential-store');
 
-assert.deepEqual(ENTRIES.map(entry => entry.id), ['guanfu', '4399', 'qqgame', '7k7k', 'baidu', '360']);
+assert.deepEqual(ENTRIES.map(entry => entry.id), ['guanfu', '4399', 'qqgame', 'baidu', '360']); // 7K7K 停用（作者 10-21）
 assert.deepEqual(PROVIDERS.map(provider => provider.label), ['WeGame - QQ', 'WeGame - 微信', 'bilibili 扫码登录', 'Steam 扫码登录', 'OPPO 扫码登录', '小米扫码登录', 'VIVO 扫码登录', '华为扫码登录', '荣耀扫码登录']);
 for (const entry of ENTRIES) assert.match(entry.entry, /^https:\/\//, entry.id);
 assert.equal(entryById('guanfu').verified, true);

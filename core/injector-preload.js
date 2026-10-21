@@ -269,6 +269,22 @@ ${record.code}
     const style = document.createElement("style");
     style.id = "jnd-micro-landing-fit";
     const HIDE = "html,body{overflow:hidden!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}";
+    if (!isOfficialLoginPage(currentUrl() || new URL("about:blank"))) {
+      style.textContent = "::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}";
+      const mountPlain = () => {
+        const root = document.head || document.documentElement;
+        if (!root) return false;
+        if (!style.isConnected) root.append(style);
+        return true;
+      };
+      if (!mountPlain()) {
+        const mo = new MutationObserver(() => {
+          if (mountPlain()) mo.disconnect();
+        });
+        mo.observe(document, { childList: true, subtree: true });
+      }
+      return;
+    }
     style.textContent = HIDE;
     const mount = () => {
       const root = document.head || document.documentElement;
@@ -349,6 +365,13 @@ ${record.code}
     setTimeout(fit, 500);
     setTimeout(fit, 2e3);
   }
+  function installLandingAutoLogin(url) {
+    if (url.hostname !== "my.4399.com" || !/^\/yxsgs\/?$/.test(url.pathname)) return;
+    const script = `(() => { let n = 0; const t = setInterval(() => { n += 1; const u = document.querySelector('.my_unlogin'); const api = window.UniLogin;
+      if (api && typeof api.showPopupLogin === 'function' && u) { clearInterval(t); if (u.offsetWidth || u.offsetHeight) api.showPopupLogin('', '', true); }
+      else if (n > 60) clearInterval(t); }, 250); })();`;
+    void webFrame.executeJavaScript(script, true).catch((error) => report("warn", `4399 登录框唤起失败：${error?.message || error}`));
+  }
   const OFFICIAL_LOGIN_PATHS = ["/login/index.html", "/login/x/index"];
   function isOfficialLoginPage(url) {
     if (TEST_ORIGIN && url.origin === TEST_ORIGIN) return OFFICIAL_LOGIN_PATHS.includes(url.pathname);
@@ -419,7 +442,7 @@ ${record.code}
           current = request;
           accepting = true;
           try {
-            await bridge.start(request.provider);
+            await (request.web && bridge.webFinish ? bridge.webFinish(request.provider, request.web) : bridge.start(request.provider));
           } catch (error) {
             if (ownRevision === revision) forward({ provider: request.provider, stage: "", qr: "", text: "", error: { code: "LOGIN_START_FAILED" } });
             report("warn", `统一登录器发起失败：${error?.message || error}`);
@@ -454,6 +477,26 @@ ${record.code}
       revision += 1;
       accepting = false;
       pending = { provider: request.provider, requestId: request.requestId };
+      try {
+        window.__JND_UNIFIED_LOGIN?.cancel();
+      } catch (_) {
+      }
+      if (attach()) void drain();
+    });
+    ipcRenderer.on("jnd-login-web-url", (_event, request) => {
+      const reply = (url, error) => {
+        try {
+          ipcRenderer.send("jnd-login-web-url-result", { reqId: request?.reqId, url, error });
+        } catch (_) {
+        }
+      };
+      Promise.resolve().then(() => window.__JND_UNIFIED_LOGIN?.webURL?.(String(request?.provider || ""))).then((url) => reply(String(url || ""), ""), (e) => reply("", String(e?.message || e?.code || e)));
+    });
+    ipcRenderer.on("jnd-login-web-finish", (_event, request) => {
+      if (!request || typeof request.provider !== "string" || !Number.isSafeInteger(request.requestId) || !request.web || typeof request.web !== "object") return;
+      revision += 1;
+      accepting = false;
+      pending = { provider: request.provider, requestId: request.requestId, web: request.web };
       try {
         window.__JND_UNIFIED_LOGIN?.cancel();
       } catch (_) {
@@ -755,6 +798,11 @@ ${record.code}
           installLandingFit();
         } catch (error) {
           report("warn", `落地页适配失败：${error.message}`);
+        }
+        try {
+          installLandingAutoLogin(url);
+        } catch (error) {
+          report("warn", `落地页登录唤起失败：${error.message}`);
         }
       }
       return false;

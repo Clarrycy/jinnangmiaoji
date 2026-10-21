@@ -48,7 +48,7 @@ function reason(code = ''): string {
   if (/^ERR_|NETWORK/.test(code)) return REASON.NETWORK_ERROR;
   if (/^HTTP_5\d\d$/.test(code)) return '平台服务器繁忙';
   if (/^HTTP_4\d\d$|_REJECTED|^STEAM_RESULT_|^OPPO_QR_STATUS_/.test(code)) return '平台拒绝了本次登录';
-  if (BROKEN.test(code)) return '登录方式暂时不可用'; // 含壳自己的 LOGIN_BRIDGE_UNAVAILABLE
+  if (BROKEN.test(code)) return '该方式暂时不可用'; // 含壳自己的 LOGIN_BRIDGE_UNAVAILABLE（作者 10-21 改字）
   return '登录未完成';
 }
 
@@ -72,9 +72,10 @@ function qrSteps(m: QrCopyInput): { steps: [string, string, string]; state: Step
   if (m.stage === 'scan') return { steps, state: ['cur', 'wait', 'wait'], foot: '' };
   if (m.stage === 'confirm') return { steps, state: ['done', 'cur', 'wait'], foot: oppo ? '请在手机上确认登录' : '' };
   if (m.stage === 'verify') return { steps, state: ['done', 'done', 'busy'], foot: '正在风控校验中' };
-  if (m.stage === 'exchanging') return { steps, state: ['done', 'done', 'busy'], foot: '已收到扫码结果，账号校验中' };
+  if (m.stage === 'exchanging') return { steps, state: ['done', 'done', 'busy'], foot: '已收到授权结果，账号校验中' };
   if (m.stage === 'entering') return { steps, state: ['done', 'done', 'busy'], foot: '正在登录游戏' };
-  if (m.stage === 'error') return { steps, state: ['cur', 'wait', 'wait'], foot: reason(m.code) };
+  // Steam 的网络类失败几乎都是连不上 steamcommunity.com（大陆普遍不通，加速器没覆盖本程序时也一样）：说准是 Steam（作者 10-21 认可）
+  if (m.stage === 'error') return { steps, state: ['cur', 'wait', 'wait'], foot: m.provider === 'Steam 扫码登录' && /^(?:NETWORK_ERROR|REQUEST_TIMEOUT)$|^ERR_|NETWORK/.test(m.code || '') ? '无法连接 Steam' : reason(m.code) };
   return { steps, state: ['wait', 'wait', 'wait'], foot: '' };
 }
 

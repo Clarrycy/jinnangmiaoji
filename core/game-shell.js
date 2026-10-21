@@ -45,16 +45,16 @@ function chromeDocument(title, iconPath, platform = "") {
     body.mac .win > header { padding-left: ${MAC_INSET}px; }
     body.mac .caption .mn, body.mac .caption .mx, body.mac .caption .cx { display: none; }
     body.mac .caption { padding-right: 4px; } body.mac .amenu { right: 6px; }
-    body.mac.full .win > header { padding-left: 0; }
-    /* 全屏（两个平台）：标题栏保留，游戏区四周外框去掉、铺满 */
-    body.full #viewport { left: 0; right: 0; bottom: 0; border: 0; border-radius: 0; }
+    /* 全屏（两个平台，作者 10-21）：只有游戏画面——标题栏收起，视域贴满；chrome 层平时高 0，有对话框／扫码卡时才盖上来 */
+    body.full .win > header { display: none; }
+    body.full #viewport { top: 0; left: 0; right: 0; bottom: 0; border: 0; border-radius: 0; }
     </style></head><body data-icon="${icon}"${platform === "darwin" ? ' class="mac"' : ""}></body></html>`;
 }
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 }
 function viewportBounds(contentWidth, contentHeight, fullscreen = false) {
-  if (fullscreen) return { x: 0, y: TITLE_HEIGHT, width: Math.max(0, contentWidth), height: Math.max(0, contentHeight - TITLE_HEIGHT) };
+  if (fullscreen) return { x: 0, y: 0, width: Math.max(0, contentWidth), height: Math.max(0, contentHeight) };
   const x = FRAME.side + 1;
   const y = TITLE_HEIGHT + FRAME.top + 1;
   return { x, y, width: Math.max(0, contentWidth - x - FRAME.side - 1), height: Math.max(0, contentHeight - y - FRAME.bottom - 1) };

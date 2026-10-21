@@ -124,6 +124,9 @@ function chromeCss(TOKENS, SPEC) {
     /* 菜单家族入场：从锚点下方 4px 淡入（100ms 透明度、140ms 位移，先快后慢），关闭即刻消失（Chrome／macOS 同款）。对话框和保存卡已有入场，菜单没有就显得「弹」出来 */
     .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden]) { animation: menuFade .1s ease-out, menuSlide .14s cubic-bezier(0,0,.2,1); } /* 用 animation 不用 transition：transition 让元素常驻合成层，定稿态文字抗锯齿会变 */
     @keyframes menuFade { from { opacity: 0; } to { opacity: 1; } } @keyframes menuSlide { from { transform: translateY(-4px); } to { transform: none; } }
+    /* 收起＝入场反着播（作者 10-21）：淡出＋上收 4px，0.1 秒，播完由引擎藏掉；收起途中不接点击 */
+    .menu.leaving:not([hidden]), .amenu.leaving:not([hidden]), .tlmenu.leaving:not([hidden]) { animation: menuFadeOut .1s ease-in forwards, menuSlideOut .1s ease-in forwards; pointer-events: none; }
+    @keyframes menuFadeOut { from { opacity: 1; } to { opacity: 0; } } @keyframes menuSlideOut { from { transform: none; } to { transform: translateY(-4px); } }
     .menu .item { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 10px; border-radius: 4px; }
     .menu .item:hover { background: ${TOKENS.hover}; }
     /* 宽度是档位不是量体裁衣：图标＋动宾短语、右侧无内容的菜单取 160——文字列（40 起、4 字到 92）之后留一个与左列等宽的呼吸列；208 是右键菜单档（长短语），112 则让 hover 药丸贴着字 */
@@ -281,6 +284,26 @@ function chromeCss(TOKENS, SPEC) {
     #viewport .dlg.qr .steps li.cur { color: ${TOKENS.ink}; } #viewport .dlg.qr .steps li.cur i { background: ${TOKENS.ink}; color: #fff; box-shadow: none; } /* 状态只用颜色和标记表达，不改字重：字重一变字宽就变，整列会抖 */
     #viewport .dlg.qr .steps li.done { color: ${TOKENS.ink2}; } #viewport .dlg.qr .steps li.done i { background: ${TOKENS.ink}; color: #fff; box-shadow: none; }
     #viewport .dlg.qr .steps li.busy { color: ${TOKENS.ink}; } #viewport .dlg.qr .steps li.busy i { box-shadow: none; border: 2px solid rgba(0,0,0,.1); border-top-color: ${TOKENS.ink}; box-sizing: border-box; animation: qrspin .9s linear infinite; }
+    /* 「使用网页登录」：左下角浅灰按钮（作者 10-21 定乙），兜底常在，样式同对话框次按钮；换码时随新码重新淡入 */
+    /* 量过（作者 10-21）：步骤圆圈 18 宽、中心 x=9，步骤文字起于 x=28、13px。按钮左缘外探 7：箭头（12 宽）落在 3–15、中心 9；文字起于 28 */
+    #viewport .dlg.qr .wl { position: absolute; z-index: 1; left: -7px; bottom: 0; display: inline-flex; align-items: center; gap: 13px; padding: 0 12px 0 10px; font-size: 13px; -webkit-tap-highlight-color: transparent; outline: none; }
+    #viewport .dlg.qr .wl[hidden] { display: none; } #viewport .dlg.qr .wl svg { width: 12px; height: 12px; flex: none; }
+    #viewport .dlg.qr .wl { transition: opacity .3s ease, background-color .12s ease; } #viewport .dlg.qr .wl.arming { opacity: 0; pointer-events: none; } /* 稍等再淡入 */
+    /* 码那块里的提示：转圈下面写获取中／重试中；出错时白块上方写原因 */
+    #viewport .dlg.qr .ov .ovt { grid-area: auto; position: absolute; left: 0; right: 0; top: calc(50% + 26px); text-align: center; font-size: 12px; line-height: 18px; color: ${TOKENS.ink2}; white-space: nowrap; }
+    #viewport .dlg.qr[data-stage="loading"] .ov .ovt, #viewport .dlg.qr[data-stage="retrying"] .ov .ovt { opacity: 1; }
+
+    /* 网页登录浮层：外框照外壳——32 高灰条、三边 3px、页面区 1px 边线＋圆角 6；关闭键同标题栏右上角 */
+    #viewport .ws-scrim { position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .15s ease; }
+    #viewport .ws-scrim.in { opacity: 1; }
+    #viewport .ws { width: 446px; padding: 0 3px 3px; box-sizing: border-box; background: #f3f3f3; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.08); }
+    #viewport .ws .hd { height: ${BAR}px; display: flex; align-items: center; gap: 8px; padding-left: 9px; font-size: 12px; color: ${TOKENS.ink}; }
+    #viewport .ws .hd .bi { width: 16px; height: 16px; border-radius: 3px; flex: none; } #viewport .ws .hd .bi[hidden] { display: none; }
+    #viewport .ws .hd .src { color: ${TOKENS.ink3}; }
+    #viewport .ws .wsx { margin-left: auto; width: ${SPEC.caption.w}px; height: ${BAR}px; display: grid; place-items: center; color: var(--ink-2); position: relative; z-index: 0; }
+    #viewport .ws .wsx::before { content: ""; position: absolute; left: ${(SPEC.caption.w - SPEC.caption.pillW) / 2}px; right: ${(SPEC.caption.w - SPEC.caption.pillW) / 2}px; top: ${(SPEC.caption.h - SPEC.caption.pillH) / 2}px; bottom: ${(SPEC.caption.h - SPEC.caption.pillH) / 2}px; border-radius: 4px; z-index: -1; }
+    #viewport .ws .wsx:hover::before { background: rgba(0,0,0,.06); } #viewport .ws .wsx:active::before { background: rgba(0,0,0,.12); } #viewport .ws .wsx svg { width: 16px; height: 16px; }
+    #viewport .ws .page { height: min(600px, calc(100vh - ${BAR}px - ${BAR}px - 3px - 64px)); border: 1px solid #e3e3e5; border-radius: 6px; background: #fff; }
     #viewport .dlg.qr .qst { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 18px; color: ${TOKENS.ink2}; } /* 永远一行（作者 10-21）：文案按 qr-copy.ts 的宽度预算写，不换行也不截断 */
     #viewport .dlg.qr[data-stage="exchanging"] .qst { color: ${TOKENS.ok}; }
     /* 更新页状态块 */

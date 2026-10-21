@@ -1,6 +1,6 @@
 // 由 src/core/main-app.ts 生成（node scripts/build-ts.js）；改源文件，不要改这里。
 const electron_ = require("electron");
-const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage, screen, shell, net } = electron_;
+const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage, screen, shell, net, clipboard } = electron_;
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
@@ -20,6 +20,10 @@ const { createPluginStore } = plugin_store_;
 const components_ = require("./components");
 const { COMPONENTS, parseUserScriptHeader } = components_;
 const entries_ = require("./entries");
+const landing_pack_ = require("./landing-pack");
+const login_recorder_ = require("./login-recorder");
+const { createLoginRecorder } = login_recorder_;
+const { createLandingPack } = landing_pack_;
 const { ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 const game_shell_ = require("./game-shell");
 const { TITLE_HEIGHT, FRAME, BAR_COLOR, MAC_LIGHTS, MAC_INSET, frameDocument, chromeDocument, viewportBounds } = game_shell_;
@@ -120,7 +124,15 @@ module.exports = function startMicroClient(config) {
       });
     }
   }
+  const loginRecorder = createLoginRecorder({ meta: () => ({ shell: channel.shellVersion, platform: process.platform, arch: process.arch, electron: process.versions.electron }) });
+  let lastEvidenceAt = 0;
   function log(...args) {
+    loginRecorder.log(args);
+    if (String(args[0]).startsWith("login-error") && Date.now() - lastEvidenceAt > 3e3) {
+      lastEvidenceAt = Date.now();
+      const evidence = loginRecorder.takeEvidence();
+      if (evidence.length) setImmediate(() => log("login-evidence", JSON.stringify(evidence)));
+    }
     logBuffer += `[${(/* @__PURE__ */ new Date()).toISOString()}] ${args.join(" ")}
 `;
     const head = String(args[0] || "");
@@ -161,14 +173,19 @@ module.exports = function startMicroClient(config) {
     if (/\.php$|\/login\//i.test(url.pathname) || /api/i.test(url.hostname)) return false;
     return ASSET_EXT.test(url.pathname);
   }
-  function installSharedAssetRedirect(session) {
-    if (!SHARED_CACHE) return;
+  const LOGIN_API = /^https:\/\/web-login-api(?:test)?\.sanguosha\.com\//i;
+  function installRequestHooks(session, loginStarted) {
     session.webRequest.onBeforeRequest({ urls: ["https://*/*"] }, (details, callback) => {
+      if (LOGIN_API.test(details.url)) {
+        loginStarted.set(details.id, Date.now());
+        callback({});
+        return;
+      }
       if (/\/img\/10th_tmp\/yjcm_n_ban\.png$/i.test(details.url)) {
         callback({ cancel: true });
         return;
       }
-      if (details.method !== "GET" || !ASSET_TYPES.has(String(details.resourceType))) {
+      if (!SHARED_CACHE || details.method !== "GET" || !ASSET_TYPES.has(String(details.resourceType))) {
         callback({});
         return;
       }
@@ -181,56 +198,138 @@ module.exports = function startMicroClient(config) {
         callback({});
         return;
       }
-      callback({ redirectURL: `jnd-asset://shared/${encodeURIComponent(details.url)}` });
-    });
-  }
-  function installSharedAssetScheme() {
-    if (!SHARED_CACHE) return;
-    const { protocol } = electron_;
-    protocol.handle("jnd-asset", async (request) => {
-      let original = "";
+      let from = details.referrer || "";
       try {
-        original = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ""));
+        if (!from && details.frame?.url) from = new URL(details.frame.url).origin + "/";
       } catch (_) {
       }
-      if (!/^https:\/\//i.test(original)) return new Response("", { status: 400 });
-      const headers = new Headers();
-      for (const key of ["accept", "range", "referer", "origin"]) {
-        const value = request.headers.get(key);
-        if (value && /^[\x20-\x7e]*$/.test(value)) headers.set(key, value);
-      }
-      try {
-        const upstream = await net.fetch(original, { method: "GET", headers, redirect: "follow" });
-        const out = new Headers();
-        for (const key of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "cache-control", "expires", "date"]) {
-          const value = upstream.headers.get(key);
-          if (value) out.set(key, value);
-        }
-        out.set("access-control-allow-origin", "*");
-        return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: out });
-      } catch (error) {
-        log("shared asset fetch failed", original.slice(0, 120), error?.message || error);
-        return new Response("", { status: 502 });
-      }
+      callback({ redirectURL: `jnd-asset://shared/${encodeURIComponent(details.url)}${from ? `?from=${encodeURIComponent(from)}` : ""}` });
     });
+  }
+  async function serveSharedAsset(request) {
+    let original = "", from = "";
+    try {
+      const u = new URL(request.url);
+      original = decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+      from = u.searchParams.get("from") || "";
+    } catch (_) {
+    }
+    if (!/^https:\/\//i.test(original)) return new Response("", { status: 400 });
+    const headers = new Headers();
+    for (const key of ["accept", "range", "origin"]) {
+      const value = request.headers.get(key);
+      if (value && /^[\x20-\x7e]*$/.test(value)) headers.set(key, value);
+    }
+    const referrer = from || request.headers.get("referer") || "";
+    if (referrer && /^https?:\/\/[\x21-\x7e]+$/.test(referrer)) headers.set("referer", referrer);
+    const local = landingPack?.serveAsset(original, request.headers.get("range"));
+    if (local) return local;
+    try {
+      const upstream = await net.fetch(original, { method: "GET", headers, redirect: "follow", referrerPolicy: "unsafe-url" });
+      const out = new Headers();
+      for (const key of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "cache-control", "expires", "date"]) {
+        const value = upstream.headers.get(key);
+        if (value) out.set(key, value);
+      }
+      out.set("access-control-allow-origin", "*");
+      return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: out });
+    } catch (error) {
+      log("shared asset fetch failed", original.slice(0, 120), "referer=", referrer ? "yes" : "no", error?.message || error);
+      return new Response("", { status: 502 });
+    }
+  }
+  let landingPack = null;
+  function loadEntry(contents, url) {
+    const ses = contents.session;
+    if (landingPack?.has() && landingPack.isDoc(url) && !ses.protocol.isProtocolHandled("https")) {
+      let armed = true;
+      const t0 = Date.now();
+      const release = () => {
+        if (!armed) return;
+        armed = false;
+        try {
+          ses.protocol.unhandle("https");
+        } catch (_) {
+        }
+        installSessionHooks(ses);
+      };
+      removeSessionHooks(ses);
+      ses.protocol.handle("https", (request) => {
+        try {
+          const doc = armed && request.method === "GET" && landingPack.isDoc(request.url);
+          setImmediate(release);
+          const local = doc ? landingPack.serveDoc() : null;
+          if (local) {
+            log("landing doc from pack ms=", Date.now() - t0);
+            setTimeout(() => landingPack?.refresh(), 15e3);
+            return local;
+          }
+        } catch (error) {
+          log("landing doc serve failed", error?.stack || error);
+        }
+        return ses.fetch(request, { bypassCustomProtocolHandlers: true });
+      });
+      setTimeout(release, 15e3);
+    }
+    return contents.loadURL(url);
+  }
+  function installSharedAssetScheme() {
+    try {
+      app.userAgentFallback = cleanUserAgent(app.userAgentFallback);
+    } catch (error) {
+      log("user agent fallback failed", error?.message || error);
+    }
+    if (process.env.JND_NO_LANDING_PACK !== "1") landingPack = createLandingPack({
+      dir: path.join(app.getPath("userData"), "landing-pack"),
+      seedDir: path.join(__dirname, "landing-seed"),
+      log,
+      fetch: (url) => net.fetch(url, { headers: { referer: "https://web.sanguosha.com/" }, referrerPolicy: "unsafe-url", bypassCustomProtocolHandlers: true })
+    });
+    if (!SHARED_CACHE) return;
+    normalizeUserAgent(electron_.session.defaultSession);
+    electron_.protocol.handle("jnd-asset", serveSharedAsset);
+  }
+  function cleanUserAgent(ua) {
+    const appToken = `${app.getName()}/${app.getVersion()}`;
+    return ua.replace(/\s+Electron\/\S+/i, "").split(` ${appToken}`).join("").replace(/\s+[A-Za-z0-9_.-]*jinnangdai[A-Za-z0-9_.-]*\/\S+/i, "").replace(/\s+\S*[^\x20-\x7e]\S*\/\S+/g, "").replace(/[^\x20-\x7e]+/g, "").replace(/\s{2,}/g, " ").trim();
+  }
+  function normalizeUserAgent(session) {
+    try {
+      session.setUserAgent(cleanUserAgent(session.getUserAgent()));
+    } catch (error) {
+      log("user agent normalize failed", error?.message || error);
+    }
   }
   function configureSession(session) {
     if (configuredSessions.has(session)) return;
     configuredSessions.add(session);
-    installSharedAssetRedirect(session);
-    try {
-      const appToken = `${app.getName()}/${app.getVersion()}`;
-      const ua = session.getUserAgent().replace(/\s+Electron\/\S+/i, "").split(` ${appToken}`).join("").replace(/\s+[A-Za-z0-9_.-]*jinnangdai[A-Za-z0-9_.-]*\/\S+/i, "").replace(/\s+\S*[^\x20-\x7e]\S*\/\S+/g, "");
-      session.setUserAgent(ua);
-    } catch (error) {
-      log("user agent normalize failed", error?.message || error);
+    if (SHARED_CACHE) {
+      try {
+        if (!session.protocol.isProtocolHandled("jnd-asset")) session.protocol.handle("jnd-asset", serveSharedAsset);
+      } catch (error) {
+        log("shared asset scheme failed", error?.message || error);
+      }
     }
-    const loginApi = { urls: ["https://web-login-api.sanguosha.com/*", "https://web-login-apitest.sanguosha.com/*"] };
-    const started = /* @__PURE__ */ new Map();
-    session.webRequest.onBeforeRequest(loginApi, (details, callback) => {
-      started.set(details.id, Date.now());
-      callback({});
+    normalizeUserAgent(session);
+    installSessionHooks(session);
+    session.setPermissionRequestHandler((_wc, permission, callback, details) => {
+      if (permission === "openExternal") {
+        let scheme = "";
+        try {
+          scheme = new URL(String(details?.externalURL || "")).protocol;
+        } catch (_) {
+        }
+        log("external protocol blocked", scheme || "?");
+        callback(false);
+        return;
+      }
+      callback(true);
     });
+  }
+  function installSessionHooks(session) {
+    const started = /* @__PURE__ */ new Map();
+    installRequestHooks(session, started);
+    const loginApi = { urls: ["https://web-login-api.sanguosha.com/*", "https://web-login-apitest.sanguosha.com/*"] };
     session.webRequest.onCompleted(loginApi, (details) => {
       const ms = Date.now() - (started.get(details.id) || Date.now());
       started.delete(details.id);
@@ -257,6 +356,14 @@ module.exports = function startMicroClient(config) {
       }
       callback({ responseHeaders: headers });
     });
+  }
+  function removeSessionHooks(session) {
+    for (const ev of ["onBeforeRequest", "onCompleted", "onErrorOccurred", "onHeadersReceived"]) {
+      try {
+        session.webRequest[ev](null);
+      } catch (_) {
+      }
+    }
   }
   function showErrorPage(contents, text, error) {
     if (contents.isDestroyed()) return;
@@ -311,7 +418,7 @@ module.exports = function startMicroClient(config) {
     const { win } = record;
     if (win.isDestroyed()) return;
     const { width, height } = win.getContentBounds();
-    const chromeBounds = record.covered ? { x: 0, y: 0, width, height } : { x: 0, y: 0, width, height: TITLE_HEIGHT };
+    const chromeBounds = record.covered ? { x: 0, y: 0, width, height } : { x: 0, y: 0, width, height: win.isFullScreen() ? 0 : TITLE_HEIGHT };
     const chromeKey = JSON.stringify(chromeBounds);
     if (record.chromeKey !== chromeKey) {
       record.chromeKey = chromeKey;
@@ -325,12 +432,101 @@ module.exports = function startMicroClient(config) {
     }
     record.overlays.relayout();
   }
+  let recorderWin = null;
+  const RECORDER_LABELS = { idle: "未录制", recording: "录制中", paused: "已暂停", stopped: "已停止" };
+  function recorderPage() {
+    return `<!doctype html><meta charset="utf-8"><title>登录录制器</title><style>
+      body{margin:0;padding:14px 16px;font:13px/1.6 -apple-system,"PingFang SC","Segoe UI","Microsoft YaHei UI",sans-serif;color:#1b1b1f;background:#fff;-webkit-user-select:none;user-select:none}
+      .st{display:flex;align-items:center;gap:8px;height:22px}.dot{width:8px;height:8px;border-radius:50%;background:#c9c9cd}.rec .dot{background:#cd8676}
+      .n{color:#5c5c63;margin-left:auto}.err{min-height:20px;color:#b4534a;font-size:12px}
+      .row{display:flex;gap:6px;margin-top:8px}button{flex:1;height:28px;font:inherit;border:1px solid #e1e1e3;background:#fff;color:#1b1b1f;border-radius:6px;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent}
+      button:hover:not(:disabled){background:#f3f3f3}button:disabled{color:#b8b8bd;cursor:default}
+    </style><div class="st" id="st"><span class="dot"></span><span id="label"></span><span class="n" id="n"></span></div><div class="err" id="err"></div>
+    <div class="row"><button id="start">录制</button><button id="pause">暂停</button><button id="resume">继续</button><button id="stop">停止</button></div>
+    <div class="row"><button id="clear">清空</button><button id="copy">复制</button><button id="export">导出</button></div>
+    <script>
+      const L=${JSON.stringify(RECORDER_LABELS)};const $=id=>document.getElementById(id);
+      for(const id of ['start','pause','resume','stop','clear','copy','export'])$(id).onclick=()=>window.jndRecorder.cmd(id);
+      window.jndRecorder.onState(s=>{$('label').textContent=L[s.status]||s.status;$('n').textContent=s.count+' 条'+(s.dropped?'（最早的 '+s.dropped+' 条已滚出）':'');$('err').textContent=s.error||s.note||'';
+        $('st').className='st'+(s.status==='recording'?' rec':'');
+        $('start').disabled=s.status==='recording'||s.status==='paused';$('pause').disabled=s.status!=='recording';$('resume').disabled=s.status!=='paused';$('stop').disabled=!(s.status==='recording'||s.status==='paused');
+        $('clear').disabled=$('copy').disabled=$('export').disabled=!s.count;});
+    </script>`;
+  }
+  let recorderNote = "";
+  function pushRecorderState() {
+    if (recorderWin && !recorderWin.isDestroyed()) recorderWin.webContents.send("jnd-recorder-state", { ...loginRecorder.state(), note: recorderNote });
+  }
+  loginRecorder.onChange(pushRecorderState);
+  function openLoginRecorder() {
+    if (app.isPackaged && process.env.JND_DEV !== "1") return;
+    if (recorderWin && !recorderWin.isDestroyed()) {
+      if (recorderWin.isMinimized()) recorderWin.restore();
+      recorderWin.show();
+      recorderWin.focus();
+      return;
+    }
+    recorderWin = new BrowserWindow({
+      width: 360,
+      height: 168,
+      useContentSize: true,
+      title: "登录录制器",
+      resizable: false,
+      maximizable: false,
+      minimizable: true,
+      fullscreenable: false,
+      alwaysOnTop: true,
+      show: false,
+      backgroundColor: "#ffffff",
+      webPreferences: { preload: path.join(__dirname, "recorder-preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false }
+    });
+    recorderWin.setMenuBarVisibility?.(false);
+    recorderWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(recorderPage())}`).catch((error) => log("recorder load failed", error?.message || error));
+    recorderWin.once("ready-to-show", () => recorderWin?.show());
+    recorderWin.on("closed", () => {
+      recorderWin = null;
+    });
+    log("login recorder opened");
+  }
+  function installRecorderIpc() {
+    ipcMain.on("jnd-recorder-cmd", async (event, cmd) => {
+      if (!recorderWin || event.sender !== recorderWin.webContents) return;
+      recorderNote = "";
+      try {
+        if (cmd === "start") loginRecorder.start();
+        else if (cmd === "pause") loginRecorder.pause();
+        else if (cmd === "resume") loginRecorder.resume();
+        else if (cmd === "stop") loginRecorder.stop();
+        else if (cmd === "clear") loginRecorder.clear();
+        else if (cmd === "copy") {
+          clipboard.writeText(loginRecorder.dump());
+          recorderNote = "已复制到剪贴板";
+        } else if (cmd === "export") {
+          const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+          const r = process.env.JND_RECORDER_EXPORT_PATH ? { canceled: false, filePath: process.env.JND_RECORDER_EXPORT_PATH } : await dialog.showSaveDialog(recorderWin, { defaultPath: path.join(app.getPath("downloads"), `锦囊妙计-登录录制-${stamp}.json`), filters: [{ name: "JSON", extensions: ["json"] }] });
+          if (!r.canceled && r.filePath) {
+            fs.writeFileSync(r.filePath, loginRecorder.dump());
+            recorderNote = `已导出：${path.basename(r.filePath)}`;
+          }
+        }
+        loginRecorder.setError("");
+      } catch (error) {
+        loginRecorder.setError(`${cmd === "export" ? "导出" : cmd === "copy" ? "复制" : "操作"}失败：${error?.message || error}`);
+        log("login recorder error", cmd, error?.message || error);
+      }
+      pushRecorderState();
+    });
+  }
+  function isFullscreenEsc(win, input) {
+    return input.type === "keyDown" && input.key === "Escape" && !input.control && !input.meta && !input.alt && !input.shift && !win.isDestroyed() && win.isFullScreen();
+  }
   function raiseTab(record, tab) {
     const cv = record.win.contentView;
     try {
       cv.addChildView(tab.view);
       cv.addChildView(record.chrome);
       record.overlays.raise();
+      if (tab.webSheet) cv.addChildView(tab.webSheet.view);
     } catch (error) {
       log("raise tab failed", error?.message || error);
     }
@@ -401,7 +597,7 @@ module.exports = function startMicroClient(config) {
     const { win } = record;
     win.contentView.addChildView(view, 0);
     try {
-      view.setBackgroundColor("#1a1a1a");
+      view.setBackgroundColor("#fafafa");
     } catch (_) {
     }
     if (process.env.JND_NO_VIEW_RADIUS !== "1") {
@@ -432,6 +628,14 @@ module.exports = function startMicroClient(config) {
     });
     contents.on("did-stop-loading", pushLater);
     contents.on("audio-state-changed", pushLater);
+    contents.on("dom-ready", () => {
+      if (!landingPack || !landingPack.isDoc(contents.getURL())) return;
+      setTimeout(() => {
+        if (contents.isDestroyed() || !landingPack?.isDoc(contents.getURL())) return;
+        contents.executeJavaScript(`(() => { const v = document.getElementById("sgsBgVideo"), d = document.getElementById("sgsVideoImg"); const m = d && /url\\(["']?([^"')]+)/.exec(d.style.backgroundImage || ""); return { mp4: v ? v.getAttribute("src") : "", img: m ? m[1] : "" }; })()`, true).then((bg) => landingPack?.noteBackground(bg)).catch(() => {
+        });
+      }, 4e3);
+    });
     contents.on("did-finish-load", () => {
       const url = contents.getURL();
       log("did-finish-load", tag, "url=", url);
@@ -519,6 +723,12 @@ module.exports = function startMicroClient(config) {
     });
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
+      if (isFullscreenEsc(tab.owner.win, input)) {
+        event.preventDefault();
+        log("fullscreen esc from=game");
+        tab.owner.win.setFullScreen(false);
+        return;
+      }
       if (handleMacEditShortcut(contents, input, tab.owner.win)) {
         event.preventDefault();
         return;
@@ -528,8 +738,9 @@ module.exports = function startMicroClient(config) {
       event.preventDefault();
       chromeSend(tab.owner, "jnd-chrome-command", name);
     });
+    if (known && msg.restored) log("login-trace restore slot=", slot, "entry=", entry.id, "provider=", providerId || "-", "status=", known.status, "nick=", known.nick ? "yes" : "no", "gmSession=", fs.existsSync(path.join(gmStoreDirectory(), `slot-${slot}`, "unified-login.json")) ? "file" : "none");
     if (providerId && !msg.restored) startProviderLogin(tab.owner, tab, providerId);
-    else contents.loadURL(entryUrl(entry)).catch((error) => {
+    else loadEntry(contents, entryUrl(entry)).catch((error) => {
       log("loadURL-threw", error?.message || error);
       showErrorPage(contents, `无法加载入口：${error?.message || error}`, error);
     });
@@ -554,6 +765,7 @@ module.exports = function startMicroClient(config) {
   }
   function shortcutName(input) {
     const k = String(input.key || "").toLowerCase(), c = input.control || input.meta;
+    if (c && input.shift && input.alt && input.code === "KeyR") return "recorder";
     if (c && input.shift && k === "a") return "tabList";
     if (c && input.shift && k === "m") return "pm";
     if (c && input.shift && k === "s") return "settings";
@@ -562,6 +774,7 @@ module.exports = function startMicroClient(config) {
     if (c && k === "tab") return input.shift ? "prevTab" : "nextTab";
     if (input.alt && k === "f") return "menu";
     if (!IS_MAC && k === "f11") return "fullscreen";
+    if (IS_MAC && input.control && input.meta && k === "f") return "fullscreen";
     return null;
   }
   const partitionName = (slot) => `persist:jinnangdai-${channel.id}-${slot}`;
@@ -569,6 +782,7 @@ module.exports = function startMicroClient(config) {
     try {
       const ses = electron_.session.fromPartition(partitionName(slot));
       ses.clearStorageData().catch((error) => log("wipe slot failed", slot, error?.message || error));
+      ses.clearCache().catch((error) => log("wipe slot cache failed", slot, error?.message || error));
     } catch (error) {
       log("wipe slot failed", slot, error?.message || error);
     }
@@ -635,15 +849,21 @@ module.exports = function startMicroClient(config) {
   function closeTab(record, id, fromGame = false, opts = {}) {
     const tab = record.tabs.get(id);
     if (!tab) return;
+    tab.webSheet?.close("tab-closed");
     record.tabs.delete(id);
     record.order = record.order.filter((x) => x !== id);
     clearTimeout(recoveryTimers.get(tab.contents));
     recoveryTimers.delete(tab.contents);
-    try {
-      record.win.contentView.removeChildView(tab.view);
-    } catch (_) {
-    }
-    if (!tab.contents.isDestroyed()) tab.contents.close({ waitForBeforeUnload: false });
+    if (record.active === tab && record.tabs.size > 0) {
+      record.active = null;
+      dropLeaving(record);
+      try {
+        tab.contents.setAudioMuted(true);
+      } catch (_) {
+      }
+      record.leaving = tab;
+      record.leavingTimer = setTimeout(() => dropLeaving(record), 1200);
+    } else disposeTabView(record, tab);
     occupiedSlots.delete(tab.slot);
     if (tab.loginProvider) qrClose(record, tab, "tab-closed");
     log("tab closed slot=", tab.slot, "tab=", id);
@@ -654,7 +874,35 @@ module.exports = function startMicroClient(config) {
     }
     if (fromGame) chromeSend(record, "jnd-chrome-command", "closeTab");
   }
+  function disposeTabView(record, tab) {
+    try {
+      record.win.contentView.removeChildView(tab.view);
+    } catch (_) {
+    }
+    if (!tab.contents.isDestroyed()) tab.contents.close({ waitForBeforeUnload: false });
+  }
+  function dropLeaving(record) {
+    clearTimeout(record.leavingTimer);
+    record.leavingTimer = null;
+    const tab = record.leaving;
+    record.leaving = null;
+    if (tab) disposeTabView(record, tab);
+  }
+  async function whenPainted(tab, budgetMs) {
+    const until = Date.now() + budgetMs, contents = tab.contents;
+    while (Date.now() < until && !contents.isDestroyed()) {
+      try {
+        const b = tab.view.getBounds();
+        const img = await Promise.race([contents.capturePage({ x: Math.floor(b.width / 2), y: Math.floor(b.height / 2), width: 1, height: 1 }), new Promise((r) => setTimeout(() => r(null), 120))]);
+        if (img && !img.isEmpty()) return true;
+      } catch (_) {
+      }
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    return false;
+  }
   function activateTab(record, id, kind) {
+    for (const [, other] of record.tabs) if (other.id !== id) other.webSheet?.close("tab-switched");
     record.cur = id;
     record.curKind = kind;
     setTitle(record);
@@ -664,6 +912,7 @@ module.exports = function startMicroClient(config) {
       if (record.cur !== id || tab.contents.isDestroyed()) return;
       raiseTab(record, tab);
       record.active = tab;
+      dropLeaving(record);
       for (const [, other] of record.tabs) if (other !== tab && !other.contents.isDestroyed()) {
         try {
           other.view.setVisible(false);
@@ -681,8 +930,13 @@ module.exports = function startMicroClient(config) {
       tab.view.setVisible(true);
     } catch (_) {
     }
-    const painted = tab.contents.executeJavaScript("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))", true).catch(() => 0);
-    Promise.race([painted, new Promise((r) => setTimeout(r, 150))]).then(settle, settle);
+    const t0 = Date.now();
+    const budget = tab.shownOnce ? 600 : 300;
+    tab.shownOnce = true;
+    whenPainted(tab, budget).then((ok) => {
+      log("tab shown slot=", tab.slot, "painted=", ok, "ms=", Date.now() - t0);
+      settle();
+    }, settle);
   }
   function detachTab(record, msg) {
     if (msg.kind && msg.kind !== "game") {
@@ -807,6 +1061,17 @@ module.exports = function startMicroClient(config) {
     pushTabState(record, tab);
     return true;
   }
+  function commitLogin(tab, why) {
+    try {
+      void tab.contents.session.cookies.flushStore().catch((error) => log("cookie flush failed", tab.slot, error?.message || error));
+    } catch (_) {
+    }
+    for (const key of [...gmFlushTimers.keys()]) if (key.startsWith(`slot-${tab.slot}/`)) {
+      clearTimeout(gmFlushTimers.get(key));
+      gmWrite(key);
+    }
+    log("login-trace commit slot=", tab.slot, "why=", why);
+  }
   async function logoutSlot(tab) {
     try {
       await tab.contents.session.clearStorageData();
@@ -838,7 +1103,7 @@ module.exports = function startMicroClient(config) {
     writeSettings({ guideDone: true });
     setTitle(record);
     log("login-trace switch entry slot=", tab.slot, "from=", from, "to=", entry.id, "logout=", Boolean(opts.logout), entry.verified ? "" : "(unverified)");
-    const go = () => tab.contents.loadURL(entryUrl(entry)).catch((error) => showErrorPage(tab.contents, `无法加载入口：${error?.message || error}`, error));
+    const go = () => loadEntry(tab.contents, entryUrl(entry)).catch((error) => showErrorPage(tab.contents, `无法加载入口：${error?.message || error}`, error));
     if (opts.logout) logoutSlot(tab).then(go);
     else go();
   }
@@ -877,6 +1142,178 @@ module.exports = function startMicroClient(config) {
   }
   function loginStateMatches(tab, state) {
     return Boolean(tab.loginProvider && state?.requestId === tab.loginRequest && state.requestProvider === tab.loginProvider && (!state.provider || state.provider === tab.loginProvider));
+  }
+  const WEB_TITLES = { steam: "Steam 账号登录", oppo: "OPPO 账号登录", vivo: "vivo 账号登录", xiaomi: "小米账号登录", qq: "QQ 账号登录", huawei: "华为账号登录", honor: "荣耀账号登录" };
+  const WEB_WIDTH = { huawei: 880, honor: 880 };
+  const webUrlWaiters = /* @__PURE__ */ new Map();
+  let webUrlSeq = 0;
+  function requestWebURL(tab, provider) {
+    return new Promise((resolve) => {
+      const reqId = ++webUrlSeq;
+      const timer = setTimeout(() => {
+        webUrlWaiters.delete(reqId);
+        resolve({ url: "", error: "BRIDGE_TIMEOUT" });
+      }, 4e3);
+      webUrlWaiters.set(reqId, (m) => {
+        clearTimeout(timer);
+        resolve({ url: String(m?.url || ""), error: String(m?.error || "") });
+      });
+      try {
+        tab.contents.send("jnd-login-web-url", { provider, reqId });
+      } catch (_) {
+        clearTimeout(timer);
+        webUrlWaiters.delete(reqId);
+        resolve({ url: "", error: "SEND_FAILED" });
+      }
+    });
+  }
+  function webCallback(provider, raw) {
+    let u;
+    try {
+      u = new URL(raw);
+    } catch (_) {
+      return null;
+    }
+    if (provider === "steam") return u.origin === "https://10th-ly-login.sanguosha.com" && u.pathname === "/steam/oauth/callback.html" && /access_token=/.test(u.hash) ? { href: u.href } : null;
+    if (provider === "qq") return u.origin === "https://imgcache.qq.com" && u.pathname === "/open/connect/widget/mobile/login/proxy.htm" || u.protocol === "auth:" && u.host === "tauth.qq.com" ? { href: u.href } : null;
+    if (provider === "huawei") return u.protocol === "com.huawei.apps.111830943:" && u.pathname === "/oauth2redirect" && /[?&]code=/.test(u.search) ? { href: u.href } : null;
+    if (provider === "honor") return raw.startsWith("hms://redirect_url") && /[?&]code=/.test(raw) ? { href: raw } : null;
+    if (provider === "xiaomi") return u.origin === "http://game.xiaomi.com" && u.pathname === "/oauthcallback/mioauth" && u.searchParams.get("code") ? { href: u.href } : null;
+    if (provider === "oppo") {
+      if (u.origin !== "https://game-login.heytap.com" || !u.pathname.startsWith("/game-union-h5/h5/client-login/")) return null;
+      const params = new URLSearchParams(u.search);
+      const hash = u.hash.replace(/^#/, "");
+      const q = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : hash;
+      try {
+        for (const [k, v] of new URLSearchParams(q)) if (!params.has(k)) params.set(k, v);
+      } catch (_) {
+      }
+      const code = String(params.get("code") || "");
+      return /^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(code) ? { code } : null;
+    }
+    return null;
+  }
+  async function openWebSheet(record, tab) {
+    const provider = String(tab.loginProvider || "");
+    if (!WEB_TITLES[provider] || tab.webSheet || tab.contents.isDestroyed()) return;
+    const { url, error } = await requestWebURL(tab, provider);
+    if (!url || !/^https:\/\//.test(url) || tab.webSheet || tab.contents.isDestroyed()) {
+      log("login-trace web open failed slot=", tab.slot, provider, error || "no-url");
+      return;
+    }
+    const ses = tab.contents.session;
+    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    try {
+      view.setBackgroundColor("#ffffff");
+      view.setBorderRadius?.(5);
+      view.setVisible(false);
+    } catch (_) {
+    }
+    const wc = view.webContents;
+    let done = false;
+    let vivoBase = "", cookieTimer = null;
+    const vivoUrl = "https://joint.vivo.com.cn/game-subaccount-login/";
+    const readVivo = async () => {
+      const list = await ses.cookies.get({ url: vivoUrl }).catch(() => []);
+      const get = (n) => String(list.find((c) => c.name === n)?.value || "");
+      return { subOpenId: get("vvf_subopenid"), openToken: get("vvf_opentoken") };
+    };
+    const onCookie = (_e, cookie, _cause, removed) => {
+      if (removed || done || !/^(vvf_subopenid|vvf_opentoken)$/.test(cookie?.name || "") || !/(^|\.)vivo\.com\.cn$/.test(String(cookie?.domain || "").replace(/^\./, ""))) return;
+      if (cookieTimer) clearTimeout(cookieTimer);
+      cookieTimer = setTimeout(async () => {
+        const v = await readVivo();
+        if (!done && v.subOpenId && v.openToken && `${v.subOpenId}
+${v.openToken}` !== vivoBase) finish(v);
+      }, 800);
+    };
+    const close = (reason) => {
+      if (tab.webSheet !== sheet) return;
+      tab.webSheet = null;
+      done = true;
+      if (cookieTimer) clearTimeout(cookieTimer);
+      try {
+        ses.cookies.removeListener("changed", onCookie);
+      } catch (_) {
+      }
+      try {
+        record.win.contentView.removeChildView(view);
+      } catch (_) {
+      }
+      if (!wc.isDestroyed()) wc.close({ waitForBeforeUnload: false });
+      chromeSend(record, "jnd-chrome-websheet", { action: "close", id: tab.id });
+      log("login-trace web close slot=", tab.slot, provider, "reason=", reason);
+      if (reason !== "done" && !tab.contents.isDestroyed()) try {
+        tab.contents.focus();
+      } catch (_) {
+      }
+    };
+    const finish = (payload) => {
+      if (done) return;
+      done = true;
+      close("done");
+      if (tab.contents.isDestroyed() || tab.loginProvider !== provider) return;
+      const requestId = ++tab.loginRequest;
+      tab.loginStartedFor = requestId;
+      tab.loginSeen = "exchanging";
+      tab.loginRetries = 0;
+      log("login-trace web finish slot=", tab.slot, provider);
+      qrUpdate(tab, { provider: providerById(provider)?.label || "", stage: "exchanging", qr: "", text: "" });
+      tab.contents.send("jnd-login-web-finish", { provider, requestId, web: payload });
+    };
+    const sheet = { view, provider, close };
+    tab.webSheet = sheet;
+    if (provider === "vivo") {
+      const v = await readVivo();
+      vivoBase = `${v.subOpenId}
+${v.openToken}`;
+      ses.cookies.on("changed", onCookie);
+    }
+    const watch = (event, raw) => {
+      const result = webCallback(provider, String(raw || ""));
+      if (result) {
+        try {
+          event?.preventDefault?.();
+        } catch (_) {
+        }
+        finish(result);
+      }
+    };
+    wc.on("will-redirect", (e, u) => watch(e, u));
+    wc.on("will-navigate", (e, u) => watch(e, u));
+    wc.on("did-start-navigation", (e, u, _inPage, isMain) => {
+      if (isMain) watch(null, u);
+    });
+    wc.on("did-navigate-in-page", (_e, u, isMain) => {
+      if (isMain) watch(null, u);
+    });
+    wc.setWindowOpenHandler(() => ({ action: "deny" }));
+    wc.on("dom-ready", () => {
+      wc.insertCSS("::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}").catch(() => {
+      });
+    });
+    wc.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown" && input.key === "Escape") {
+        event.preventDefault();
+        close("esc");
+      }
+    });
+    wc.on("did-fail-load", (_e, code, desc, failedUrl, isMain) => {
+      if (isMain && !done) {
+        const result = webCallback(provider, String(failedUrl || ""));
+        if (result) {
+          finish(result);
+          return;
+        }
+      }
+      if (!isMain || code === -3 || done) return;
+      log("login-trace web load failed slot=", tab.slot, provider, "code=", code);
+      showErrorPage(wc, `${WEB_TITLES[provider].replace(" 账号登录", "")} 官方登录页没能打开（${desc || code}）`, { code: desc, errno: code });
+    });
+    chromeSend(record, "jnd-chrome-websheet", { action: "open", id: tab.id, title: WEB_TITLES[provider], provider: providerById(provider)?.label || "", width: WEB_WIDTH[provider] || 440 });
+    log("login-trace web open slot=", tab.slot, provider);
+    wc.loadURL(url).catch(() => {
+    });
   }
   function startProviderLogin(record, tab, providerId, opts = {}) {
     const provider = providerById(providerId);
@@ -921,7 +1358,7 @@ module.exports = function startMicroClient(config) {
     const navigate = () => {
       if (contents.isDestroyed() || tab.loginRequest !== requestId) return;
       if (!tab.loginNavigation) {
-        const pending = contents.loadURL(entryUrl(official));
+        const pending = loadEntry(contents, entryUrl(official));
         tab.loginNavigation = pending;
         void pending.finally(() => {
           if (tab.loginNavigation === pending) tab.loginNavigation = null;
@@ -1119,10 +1556,28 @@ module.exports = function startMicroClient(config) {
     win.on("enter-full-screen", () => {
       windowState();
       relayout();
+      const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
+      log("fullscreen enter focus=", win.webContents.isFocused() ? "frame" : record.chromeContents.isFocused() ? "chrome" : tab && !tab.contents.isDestroyed() && tab.contents.isFocused() ? "game" : "none", "covered=", record.covered);
+      if (!record.covered && tab && record.curKind === "game" && !tab.contents.isDestroyed()) tab.contents.focus();
     });
     win.on("leave-full-screen", () => {
+      log("fullscreen leave");
       windowState();
       relayout();
+    });
+    win.webContents.on("before-input-event", (event, input) => {
+      if (isFullscreenEsc(win, input)) {
+        event.preventDefault();
+        log("fullscreen esc from=frame");
+        win.setFullScreen(false);
+      }
+    });
+    chrome.webContents.on("before-input-event", (event, input) => {
+      if (!record.covered && isFullscreenEsc(win, input)) {
+        event.preventDefault();
+        log("fullscreen esc from=chrome");
+        win.setFullScreen(false);
+      }
     });
     if (process.env.JND_DEVTOOLS === "1") chrome.webContents.openDevTools({ mode: "detach" });
     win.on("close", (event) => {
@@ -1189,7 +1644,7 @@ module.exports = function startMicroClient(config) {
           qrClose(record, tab, "logout-all");
         }
         const entry = entryById(tab.entryId) || ENTRIES[0];
-        tab.contents.loadURL(entryUrl(entry)).catch((error) => log("logout reload failed", error?.message || error));
+        loadEntry(tab.contents, entryUrl(entry)).catch((error) => log("logout reload failed", error?.message || error));
       }
     }
     for (const c of closedList()) wipeSlot(c.slot);
@@ -1213,7 +1668,16 @@ module.exports = function startMicroClient(config) {
   }
   function gmFlush(componentId) {
     clearTimeout(gmFlushTimers.get(componentId));
-    gmFlushTimers.set(componentId, setTimeout(() => {
+    gmFlushTimers.set(componentId, setTimeout(() => gmWrite(componentId), 300));
+  }
+  function gmFlushAll() {
+    for (const componentId of [...gmFlushTimers.keys()]) {
+      clearTimeout(gmFlushTimers.get(componentId));
+      gmWrite(componentId);
+    }
+  }
+  function gmWrite(componentId) {
+    {
       gmFlushTimers.delete(componentId);
       const file = path.join(gmStoreDirectory(), `${componentId}.json`);
       const temporary = `${file}.${process.pid}.tmp`;
@@ -1228,7 +1692,7 @@ module.exports = function startMicroClient(config) {
         } catch (_) {
         }
       }
-    }, 300));
+    }
   }
   const gmAllowed = (id) => Boolean(COMPONENTS.find((component) => component.id === id && component.gm)) || Boolean(pluginStore?.get(id)?.grant);
   const gmConnectHosts = (id) => {
@@ -1347,16 +1811,21 @@ module.exports = function startMicroClient(config) {
         layoutWindow(record);
       }
     });
-    ipcMain.on("jnd-chrome-cover", (event, full) => {
-      log("chrome-cover", full ? "full" : "bar");
+    ipcMain.on("jnd-chrome-cover", (event, full, keys) => {
       const record = windowOfChrome(event.sender);
       if (!record) return;
-      record.covered = Boolean(full);
-      layoutWindow(record);
+      const covered = Boolean(full), chromeKeys = covered && keys !== false;
+      log("chrome-cover", covered ? "full" : "bar", chromeKeys ? "keys=chrome" : "keys=game");
+      if (record.covered !== covered) {
+        record.covered = covered;
+        layoutWindow(record);
+      }
+      const wasKeys = Boolean(record.chromeKeys);
+      record.chromeKeys = chromeKeys;
       const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
       try {
-        if (record.covered) record.chromeContents.focus();
-        else if (tab && record.curKind === "game" && !tab.contents.isDestroyed()) tab.contents.focus();
+        if (chromeKeys && !wasKeys) record.chromeContents.focus();
+        else if (!chromeKeys && (wasKeys || !covered && record.chromeContents.isFocused()) && tab && record.curKind === "game" && !tab.contents.isDestroyed()) tab.contents.focus();
       } catch (_) {
       }
     });
@@ -1429,6 +1898,7 @@ module.exports = function startMicroClient(config) {
         else if (win.isMaximized()) win.unmaximize();
         else win.maximize();
       } else if (cmd === "fullscreen") win.setFullScreen(!win.isFullScreen());
+      else if (cmd === "recorder") openLoginRecorder();
       else if (cmd === "close") {
         record.closing = true;
         log("win.close: chrome asked (tabs=", record.tabs.size, ") reason=", String(reason || ""));
@@ -1586,6 +2056,7 @@ module.exports = function startMicroClient(config) {
         const patch = { status: "landing", entryId: found.tab.entryId };
         if (state.nickname) patch.nick = String(state.nickname);
         setContainer(slot, patch);
+        commitLogin(found.tab, "landing");
         log("login-trace landing slot=", slot, "loggedIn=", true, "nick=", state.nickname ? "yes" : "no", "provider=", state.provider || "");
       } else {
         setContainer(slot, { status: "none", nick: "", uid: "" });
@@ -1618,6 +2089,7 @@ module.exports = function startMicroClient(config) {
         const picked = tab.loginProvider;
         tab.loginProvider = null;
         qrClose(record, tab, "ready");
+        commitLogin(tab, "ready");
         setContainer(tab.slot, { provider: String(state.provider || picked || ""), status: "landing" });
         log("login-trace ready slot=", tab.slot, "provider=", state.provider);
         return;
@@ -1671,6 +2143,37 @@ module.exports = function startMicroClient(config) {
       qrUpdate(tab, { provider: providerById(id)?.label || "", stage: "loading", qr: "", text: "" });
       tab.contents.send("jnd-login-start", { provider: id, requestId });
     });
+    ipcMain.on("jnd-chrome-qr-web", (event, m) => {
+      const record = [...windows.values()].find((r) => r.chrome.webContents === event.sender);
+      const tab = record?.tabs.get(Number(m?.id));
+      if (record && tab) void openWebSheet(record, tab);
+    });
+    ipcMain.on("jnd-chrome-websheet-rect", (event, m) => {
+      const record = [...windows.values()].find((r) => r.chrome.webContents === event.sender);
+      const tab = record?.tabs.get(Number(m?.id));
+      const sheet = tab?.webSheet;
+      if (!record || !sheet) return;
+      const rect = { x: Math.round(Number(m.x)), y: Math.round(Number(m.y)), width: Math.round(Number(m.w)), height: Math.round(Number(m.h)) };
+      if (!(rect.width > 0 && rect.height > 0)) return;
+      try {
+        sheet.view.setBounds(rect);
+        record.win.contentView.addChildView(sheet.view);
+        sheet.view.setVisible(true);
+        sheet.view.webContents.focus();
+      } catch (_) {
+      }
+    });
+    ipcMain.on("jnd-chrome-websheet-close", (event, m) => {
+      const record = [...windows.values()].find((r) => r.chrome.webContents === event.sender);
+      record?.tabs.get(Number(m?.id))?.webSheet?.close("user");
+    });
+    ipcMain.on("jnd-login-web-url-result", (_event, m) => {
+      const done = webUrlWaiters.get(Number(m?.reqId));
+      if (done) {
+        webUrlWaiters.delete(Number(m.reqId));
+        done(m);
+      }
+    });
     ipcMain.on("jnd-open-page", (event, kind) => {
       const found = tabOf(event.sender);
       if (found && ["pm", "settings", "update", "about"].includes(String(kind))) chromeSend(found.record, "jnd-chrome-command", String(kind));
@@ -1682,6 +2185,7 @@ module.exports = function startMicroClient(config) {
       found.tab.nick = nick;
       found.tab.uid = uid;
       setContainer(found.tab.slot, nick || uid ? { nick, uid, status: "game" } : { nick: "", uid: "", status: "none" });
+      if (nick || uid) commitLogin(found.tab, "identity");
       if (nick && found.tab.lastAccount) {
         credentials.setNick(found.tab.entryId, found.tab.lastAccount, nick);
         pushAccounts();
@@ -1757,7 +2261,7 @@ module.exports = function startMicroClient(config) {
         return { id: component.id, seedPath, seedVersion };
       })
     });
-    gmHost = createGmRequestHost({ log, net });
+    gmHost = createGmRequestHost({ log, net, trace: (e) => loginRecorder?.gm(e) });
     shellUpdateHost = createShellUpdateHost({
       log,
       net,
@@ -1772,16 +2276,39 @@ module.exports = function startMicroClient(config) {
     try {
       const keepSlots = new Set([...uiSettings().restore ? readSettings().session?.tabs || [] : [], ...closedList()].map((t) => Number(t.slot) || 0));
       const prefix = `jinnangdai-${channel.id}-`;
-      for (const name of fs.readdirSync(path.join(app.getPath("userData"), "Partitions"))) {
+      const partitions = path.join(app.getPath("userData"), "Partitions");
+      let removed = 0;
+      for (const name of fs.existsSync(partitions) ? fs.readdirSync(partitions) : []) {
         if (!name.startsWith(prefix)) continue;
         const slot = Number(name.slice(prefix.length));
         if (!slot || keepSlots.has(slot)) continue;
-        wipeSlot(slot);
+        try {
+          fs.rmSync(path.join(partitions, name), { recursive: true, force: true });
+          removed += 1;
+        } catch (error) {
+          log("partition gc failed", slot, error?.message || error);
+        }
+        try {
+          fs.rmSync(path.join(gmStoreDirectory(), `slot-${slot}`), { recursive: true, force: true });
+        } catch (_) {
+        }
+        delete containers[slot];
       }
-    } catch (_) {
+      let dropped = 0;
+      for (const key of Object.keys(containers)) if (!keepSlots.has(Number(key))) {
+        delete containers[key];
+        dropped += 1;
+      }
+      if (removed || dropped) {
+        writeSettings({ containers });
+        log("startup partition gc removed=", removed, "containers dropped=", dropped, "kept=", keepSlots.size);
+      }
+    } catch (error) {
+      log("startup partition gc failed", error?.message || error);
     }
     installSharedAssetScheme();
     installIpc();
+    installRecorderIpc();
     createWindow();
     setInterval(() => {
       try {
@@ -1822,6 +2349,7 @@ module.exports = function startMicroClient(config) {
       log("shell apply failed", error?.message || error);
     }
     if (containersTimer) flushContainers();
+    gmFlushAll();
     flushLog(true);
   });
   app.on("activate", () => {

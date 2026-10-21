@@ -18,8 +18,8 @@ type Host = {
   // 以下都是壳才有的宿主能力；没有时引擎走 harness 的演示行为
   tabs?: { open(t: Tab, extra?: { slot?: number; account?: string; adopt?: boolean; restored?: boolean }): void; close(t: Tab): void; activate(t: Tab): void; order?(ids: number[]): void; nav(t: Tab, action: 'back' | 'fwd' | 'reload' | 'stop'): void; mute(t: Tab, muted: boolean): void; entry(t: Tab, entry: string, opts?: { logout?: boolean }): void; provider(t: Tab, provider: string, opts?: { logout?: boolean }): void; qrCancel?(t: Tab): void; detach?(t: Tab, at: { x: number; y: number; grabX: number; kind: string }): void; carry?(at: { x: number; y: number; kind: string }): void; dragEnd?(): void };
   closed?: { forget(c: ClosedTab): void };
-  window?: { command(cmd: 'minimize' | 'maximize' | 'close' | 'fullscreen', reason?: string): void; dragStart?(at: { x: number; y: number }): void; dragEnd?(): void };   // 右上三键；标题栏空白处拖窗由宿主跟鼠标
-  cover?(full: boolean): void;                 // 壳：chrome 视图要不要盖住游戏区（弹层／对话框／内页打开时）
+  window?: { command(cmd: 'minimize' | 'maximize' | 'close' | 'fullscreen' | 'recorder', reason?: string): void; dragStart?(at: { x: number; y: number }): void; dragEnd?(): void };   // 右上三键；标题栏空白处拖窗由宿主跟鼠标
+  cover?(full: boolean, keys?: boolean): void; // 壳：chrome 视图要不要盖住游戏区（弹层／对话框／内页打开时）；keys＝要不要把键盘从游戏拿过来
   settings?: { set(key: keyof Settings, value: boolean): void; logoutAll(): void | Promise<void> };
   accounts?: { update(a: Account, key: 'account' | 'password', value: string): void; remove(a: Account): void; clear(): void };
   plugins?: { setEnabled(p: UserScript, on: boolean): void; check(p: UserScript): Promise<{ updated: boolean; from?: string; version?: string }>; remove(p: UserScript): void; install(source: string): Promise<{ name: string; updated: boolean; from?: string; version: string }>; pickFile?(): Promise<string | undefined> };
@@ -43,7 +43,7 @@ type DragState = { w: Win; t: Tab; el: HTMLElement | null; grabX: number; x0: nu
 function mountChrome(opts: { S: Record<string, string>; ICON: string; SPEC: any; host: Host }) {
   const { S, ICON, SPEC, host } = opts;
 // ===== 0 常量 =====
-const ENTRIES = ['官服', '4399', 'QQ 大厅', '7K7K', '百度', '360'];
+const ENTRIES = ['官服', '4399', 'QQ 大厅', '百度', '360']; /* 7K7K 已停用（作者 10-21），见 entries.ts RETIRED_ENTRIES */
 const PROVIDERS = ['WeGame - QQ', 'WeGame - 微信', 'bilibili 扫码登录', 'Steam 扫码登录', 'OPPO 扫码登录', '小米扫码登录', 'VIVO 扫码登录', '华为扫码登录', '荣耀扫码登录'];
 const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': 'bilibili', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀' };
 const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
@@ -84,8 +84,19 @@ function closeWindow(w: Win, reason = 'caption') {
   if (settings.confirmClose && w.tabs.length >= 2) confirmCloseWindow(w.tabs.length, go); else go();
 }
 // 壳：chrome 视图盖住游戏区的理由集合；任一理由在就盖
-const coverReasons = new Set<string>(); let coverSent = false;
-function setCover(reason: string, on: boolean) { if (on) coverReasons.add(reason); else coverReasons.delete(reason); const full = coverReasons.size > 0; if (full !== coverSent) { coverSent = full; host.cover?.(full); } }
+// 提示、通知、菜单收起动画只是画在条外，不接键盘：盖着但焦点留在游戏（审计 10-21：扫过标题栏按钮游戏就丢键盘、菜单关后 110ms 才回焦点）。
+// 同一轮同步代码里理由会先撤后加（关一个菜单马上开另一个），合到微任务里只发最终状态，免得主进程来回切焦点。
+const PASSIVE_COVER = new Set(['tip', 'toast', 'leave', 'web']); /* web：网页登录浮层，键盘由主进程交给浮层里的官方页 */
+const coverReasons = new Set<string>(); let coverSent = false, keysSent = false, coverQueued = false;
+function setCover(reason: string, on: boolean) {
+  if (on) coverReasons.add(reason); else coverReasons.delete(reason);
+  if (coverQueued) return; coverQueued = true;
+  queueMicrotask(() => {
+    coverQueued = false;
+    const full = coverReasons.size > 0, keys = [...coverReasons].some(r => !PASSIVE_COVER.has(r));
+    if (full !== coverSent || keys !== keysSent) { coverSent = full; keysSent = keys; host.cover?.(full, keys); }
+  });
+}
 
 // ===== 2 布局（纯函数：窗口状态 + 条宽 → 每个标签的位置） =====
 const chipWidthCache: Record<string, number> = {}; let chipProbe: HTMLElement | null = null;
@@ -142,7 +153,7 @@ function winEl(w: Win): HTMLElement {
     q(el, '.newtab').onclick = () => { openTab(w, freshTab()); render(w); };
     q(el, '.tablist').onclick = e => { e.stopPropagation(); toggleTabList(w); };
     q(el, '.tabs').addEventListener('wheel', (e: WheelEvent) => { const L = layout(w, q(el, '.tabs').clientWidth); if (!L.overflow) return; e.preventDefault(); w.scroll += (e.deltaY || e.deltaX); render(w); }, { passive: false });
-    q(el, '.more').onclick = e => { e.stopPropagation(); const m = q(el, '.amenu'); const open = m.hidden; closeAll(); m.hidden = !open; setCover('menu', open); };
+    q(el, '.more').onclick = e => { e.stopPropagation(); const m = q(el, '.amenu'); const open = m.hidden || leaving.has(m); closeAll(); if (open) { cancelLeave(m); m.hidden = false; setCover('menu', true); } };
     q(el, '.amenu').onclick = e => { e.stopPropagation(); const it = (e.target as Element).closest('.item') as HTMLElement | null; closeAll(); const act = it?.dataset.act; if (act) openPage(w, act as PageKind); };
     q(el, '.caption .cx').onclick = () => closeWindow(w);
     q(el, '.caption .mn').onclick = () => host.window?.command('minimize');
@@ -267,7 +278,20 @@ const drag = {
 };
 
 // ===== 5 弹层：服名菜单、标签右键、全部标签、tooltip =====
-function closeAll() { for (const p of document.querySelectorAll<HTMLElement>('.menu,.amenu,.tlmenu')) p.hidden = true; for (const t of document.querySelectorAll<HTMLElement>('.tab.ctx')) t.classList.remove('ctx'); document.querySelectorAll<HTMLElement>('.entry.open,.ib.s.op.open').forEach(x => x.classList.remove('open')); setCover('menu', false); }
+/* 菜单收起动画（作者 10-21：有展开就要有反向收起）：收起时反向播 0.1 秒再藏；chrome 层等所有菜单收完才缩回标题条，否则当场被裁掉看不到。
+   收起途中又打开同一个菜单＝取消收起（cancelLeave），各打开入口都要先调它 */
+const leaving = new Map<HTMLElement, number>();
+const MENU_SEL = '.menu,.amenu,.tlmenu';
+function menusShowing(): boolean { return [...document.querySelectorAll<HTMLElement>(MENU_SEL)].some(p => !p.hidden && !leaving.has(p)); }
+function cancelLeave(p: HTMLElement) { const t = leaving.get(p); if (t === undefined) return; clearTimeout(t); leaving.delete(p); p.classList.remove('leaving'); if (!leaving.size) setCover('leave', false); }
+// 收起：菜单一关就把键盘还给游戏（理由换成不接键盘的 leave），动画播完才缩回条
+function hideMenu(p: HTMLElement) {
+  if (p.hidden || leaving.has(p)) return;
+  p.classList.add('leaving'); setCover('leave', true);
+  leaving.set(p, window.setTimeout(() => { leaving.delete(p); p.classList.remove('leaving'); p.hidden = true; if (!leaving.size) setCover('leave', false); }, 110));
+  if (!menusShowing()) setCover('menu', false);
+}
+function closeAll() { for (const p of document.querySelectorAll<HTMLElement>(MENU_SEL)) hideMenu(p); for (const t of document.querySelectorAll<HTMLElement>('.tab.ctx')) t.classList.remove('ctx'); document.querySelectorAll<HTMLElement>('.entry.open,.ib.s.op.open').forEach(x => x.classList.remove('open')); if (!menusShowing()) setCover('menu', false); }
 function menuItem(label: string, onClick: (() => void) | null, extra: { sub?: boolean; open?: boolean; disabled?: boolean; checked?: boolean } = {}) { const d = document.createElement('div'); d.className = 'item' + (extra.sub ? ' sub' : '') + (extra.open ? ' open' : '') + (extra.disabled ? ' disabled' : ''); const txt = document.createElement('span'); txt.textContent = label; d.append(txt); if (extra.checked) { const c = document.createElement('i'); c.className = 'chk'; d.append(c); } if (onClick && !extra.disabled) d.onclick = ev => { ev.stopPropagation(); onClick(); }; return d; }
 function openEntryMenu(w: Win, t: Tab) {
   closeAll(); const el = winEl(w), a = q(el, '.tab.on .entry') as HTMLElement | null; if (!a) return; a.classList.add('open');
@@ -280,11 +304,11 @@ function openEntryMenu(w: Win, t: Tab) {
     for (const e of ENTRIES) m.append(menuItem(e, () => { closeAll(); if (e === t.entry && !t.provider) return; if (loggedIn()) dialog({ title: '切换服务器？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换服务器', onOk: () => switchEntry(e) }); else { t.entry = e; t.provider = null; host.tabs?.entry(t, e); render(w); } }, { checked: e === t.entry && !t.provider }));
     const sep = document.createElement('div'); sep.className = 'sep'; m.append(sep);
     const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] : '其他渠道服', () => { subOpen = !subOpen; draw(); }, { sub: true, open: subOpen }); other.onmouseenter = () => { if (!subOpen) { subOpen = true; draw(); } }; m.append(other);
-    sub.hidden = !subOpen;
+    if (subOpen) { cancelLeave(sub); sub.hidden = false; } else hideMenu(sub);
     const pickProvider = (p: string, logout: boolean) => { t.provider = p; t.entry = PROVIDER_CHIP[p]; t.nick = ''; t.status = 'none'; render(w); if (host.tabs) host.tabs.provider(t, p, { logout }); else { q(el, '.game').textContent = ''; qrPrompt({ provider: p, stage: 'loading', qr: '', text: '' }); } };
     if (subOpen) { sub.textContent = ''; for (const p of PROVIDERS) sub.append(menuItem(p, () => { closeAll(); if (loggedIn()) dialog({ title: '切换登录方式？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换登录方式', onOk: () => pickProvider(p, true) }); else pickProvider(p, false); }, { checked: t.provider === p })); sub.style.left = (r.left - wr.left - 8 + 176 + 2) + 'px'; sub.style.top = (r.bottom - wr.top + 2 + other.offsetTop) + 'px'; }
   };
-  draw(); m.hidden = false; m.style.left = (r.left - wr.left - 8) + 'px'; m.style.top = (r.bottom - wr.top + 2) + 'px'; setCover('menu', true);
+  cancelLeave(m); draw(); m.hidden = false; m.style.left = (r.left - wr.left - 8) + 'px'; m.style.top = (r.bottom - wr.top + 2) + 'px'; setCover('menu', true);
 }
 function openTabMenu(w: Win, t: Tab, x: number, y: number) {
   closeAll(); const el = winEl(w); let m = q(el, '.cmenu') as HTMLElement | null; if (!m) { m = document.createElement('div'); m.className = 'menu cmenu'; el.append(m); }
@@ -302,10 +326,10 @@ function openTabMenu(w: Win, t: Tab, x: number, y: number) {
     ['关闭右侧标签页', () => { for (const x of w.tabs.slice(i + 1)) removeTab(w, x); if (!w.tabs.find(x => x.id === w.cur)) w.cur = t.id; render(w); }, i === w.tabs.length - 1],
   ];
   for (const it of items) { if (!it) { const sp = document.createElement('div'); sp.className = 'sep'; m.append(sp); continue; } const [label, fn, disabled] = it; m.append(menuItem(label, () => { closeAll(); fn(); }, { disabled })); }
-  m.hidden = false; m.style.left = Math.min(x - wr.left, wr.width - 218) + 'px'; m.style.top = (y - wr.top) + 'px'; setCover('menu', true);
+  cancelLeave(m); m.hidden = false; m.style.left = Math.min(x - wr.left, wr.width - 218) + 'px'; m.style.top = (y - wr.top) + 'px'; setCover('menu', true);
 }
 function toggleTabList(w: Win) {
-  const el = winEl(w); const m = q(el, '.tlmenu') as HTMLElement | null; const open = m && !m.hidden; closeAll(); if (open) return;
+  const el = winEl(w); const m = q(el, '.tlmenu') as HTMLElement | null; const open = m && !m.hidden && !leaving.has(m); closeAll(); if (open) return; /* 收起途中再点＝重新打开 */
   fillTabList(w);
 }
 function fillTabList(w: Win) { // 列表开着时可以连着关：每关一个只重绘列表，不关列表；少于两个标签才收
@@ -313,7 +337,7 @@ function fillTabList(w: Win) { // 列表开着时可以连着关：每关一个�
   if (!m) { m = document.createElement('div'); m.className = 'tlmenu'; el.append(m); }
   const closed = host.data.closed || [];
   if (w.tabs.length < 2 && !closed.length) { m.hidden = true; return; }
-  m.textContent = ''; m.hidden = false; setCover('menu', true); const r = q(el, '.tablist').getBoundingClientRect(), wr = el.getBoundingClientRect(); m.style.left = (r.left - wr.left) + 'px';
+  cancelLeave(m); m.textContent = ''; m.hidden = false; setCover('menu', true); const r = q(el, '.tablist').getBoundingClientRect(), wr = el.getBoundingClientRect(); m.style.left = (r.left - wr.left) + 'px';
   /* 入口列按本列表里最宽的标签算（打开的＋最近关闭的，「WeGame」「bilibili」都在），不按当前标签算 */
   const colW = Math.max(0, ...w.tabs.filter(t => t.kind === 'game').map(t => chipWidth(t.entry)), ...closed.map(c => chipWidth(c.entry))) - 12;
   // 名字列保证放得下 7 个汉字（官方昵称上限），列表宽度按各列实际加起来，不让名字被压省略号
@@ -360,17 +384,21 @@ function command(name: string) {
   else if (name === 'tabList') { if (hasList(w)) toggleTabList(w); }
   else if (name === 'menu') q(winEl(w), '.more').click();
   else if (name === 'fullscreen') host.window?.command('fullscreen');
+  else if (name === 'recorder') host.window?.command('recorder');
   else if (name === 'pm' || name === 'settings' || name === 'update' || name === 'about') { closeAll(); openPage(w, name); }
   else if (name === 'nextTab' || name === 'prevTab') { const i = w.tabs.indexOf(t); w.cur = w.tabs[(i + (name === 'nextTab' ? 1 : w.tabs.length - 1)) % w.tabs.length].id; closeAll(); render(w); }
   else if (name === 'closeWindow') closeWindow(w, 'command');
 }
 function shortcutOf(e: KeyboardEvent): string | null {
   const k = e.key.toLowerCase(), c = e.ctrlKey || e.metaKey;
+  if (c && e.shiftKey && e.altKey && e.code === 'KeyR') return 'recorder'; /* 登录录制器；macOS 按 Option 时 key 会变字符，按键位认 */
   if (c && e.shiftKey && k === 'a') return 'tabList'; if (c && e.shiftKey && k === 'm') return 'pm'; if (c && e.shiftKey && k === 's') return 'settings';
   if (c && !e.shiftKey && k === 't') return 'newTab'; if (c && !e.shiftKey && k === 'w') return 'closeTab'; if (c && !e.shiftKey && k === 'r') return 'reload'; if (e.key === 'F5') return 'reload';
   if (c && k === 'tab') return e.shiftKey ? 'prevTab' : 'nextTab';
   if (e.altKey && k === 'f') return 'menu'; if (e.altKey && e.key === 'ArrowLeft') return 'back'; if (e.altKey && e.key === 'ArrowRight') return 'fwd';
   if (e.key === 'F11' && !document.body.classList.contains('mac')) return 'fullscreen'; /* Windows：F11 进出全屏（macOS 用绿灯／Ctrl+Cmd+F） */
+  if (document.body.classList.contains('mac') && e.ctrlKey && e.metaKey && k === 'f') return 'fullscreen';
+  if (e.key === 'Escape' && !c && document.body.classList.contains('full') && !document.querySelector('.scrim, .save, .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden])')) return 'fullscreen'; /* 全屏时 Esc 退出；有对话框／卡片／菜单时 Esc 先归它们 */
   return null;
 }
 document.addEventListener('keydown', e => { const name = shortcutOf(e); if (!name) return; e.preventDefault(); command(name); });
@@ -447,12 +475,12 @@ function dialog(o: { title: string; body: string; cancel: string; ok: string; da
 // 没有按钮：取消＝点卡外或 Esc；刷新＝点码上的刷新标识。状态都画在码里（转圈／已扫码／刷新），卡的骨架不变。文案全部是草稿，等作者审定。
 type QrModel = { provider: string; stage: 'loading' | 'retrying' | 'scan' | 'confirm' | 'verify' | 'exchanging' | 'entering' | 'error' | 'yield'; qr: string; text: string; code?: string; retry?: number };
 /* 每个标签一张卡（审计 C1：原来全窗一个单例，B 标签开卡会抹掉 A 的卡，A 的登录挂着却再也看不到）。键是标签 id；harness 不带 id 时用 null */
-type QrCard = { el: HTMLElement; tab: number | null; cancel: (() => void) | null; retry: (() => void) | null; yielded: boolean };
+type QrCard = { el: HTMLElement; tab: number | null; cancel: (() => void) | null; retry: (() => void) | null; yielded: boolean; web: (() => void) | null; webOpen: boolean; qrShown?: number };
 const qrCards = new Map<number | null, QrCard>(); let qrClosing = 0;
 /* 覆盖只跟着「看得见的卡」走（审计 C5：原来卡对别的标签藏起来了，覆盖还挂着，透明的 chrome 盖满整窗，切到的标签点不动） */
 function qrCoverSync() { setCover('qr', qrClosing > 0 || [...qrCards.values()].some(c => !c.el.hidden)); }
 function syncCardTabs(w: Win) {
-  for (const c of qrCards.values()) c.el.hidden = c.yielded || (c.tab !== null && c.tab !== w.cur);
+  for (const c of qrCards.values()) c.el.hidden = c.yielded || c.webOpen || (c.tab !== null && c.tab !== w.cur);
   qrCoverSync();
   if (saveEl) { saveEl.hidden = saveTab !== null && saveTab !== w.cur; setCover('save', !saveEl.hidden); }
 }
@@ -523,7 +551,7 @@ function updateQr(m: QrModel, tabId?: number) {
         if (!live() || img.dataset.src !== m.qr) return;
         img.hidden = false;
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          if (live() && img.dataset.src === m.qr) qrbox.classList.add('has-qr');
+          if (live() && img.dataset.src === m.qr) { qrbox.classList.add('has-qr'); card.qrShown = (card.qrShown || 0) + 1; const wb = q(el, '.wl') as HTMLElement; if (!wb.hidden && card.qrShown > 1) armWeb(wb); } /* 换码（第二张起）：按钮随新码重新淡入；第一张码出来时不重复（作者 10-21） */
         }));
       };
       img.src = u;
@@ -534,14 +562,60 @@ function updateQr(m: QrModel, tabId?: number) {
     setTimeout(() => { if (!img.dataset.src) { img.hidden = true; img.removeAttribute('src'); } }, 240);
   }
   const sm = qrSteps(m); const lis = el.querySelectorAll('.steps li'); sm.steps.forEach((t, i) => { const li = lis[i] as HTMLElement; const span = li.querySelector('span') as HTMLElement, mark = li.querySelector('i') as HTMLElement; if (li.className !== sm.state[i]) li.className = sm.state[i]; if (span.textContent !== t) span.textContent = t; const markHtml = sm.state[i] === 'done' ? S.check : sm.state[i] === 'busy' ? '' : String(i + 1); if (mark.dataset.v !== markHtml) { mark.dataset.v = markHtml; mark.innerHTML = markHtml; } }); /* 只在变化时改 DOM：原来每次更新都重写文字和字重，整列重排一次 */
-  const footText = sm.foot;
+  /* 跟二维码本身有关的提示（获取中、重试中、失败原因）写在码那块里：左下角留给兜底按钮（作者 10-21：按钮常在、状态行不许上移） */
+  const inTile = TILE_STAGES.has(m.stage);
+  const ovt = q(el, '.ovt'); const ovtText = inTile && m.stage !== 'error' ? sm.foot : ''; if (ovt.textContent !== ovtText) ovt.textContent = ovtText;
+  /* 出错（作者 10-21）：码块里只有刷新图标＋一行短原因；图标本身就是「点这里重来」，不给悬停提示（挂在整块上只能落在块边，离图标和字都远），动作名只进无障碍标签 */
+  const why = q(el, '.rb span'); const whyText = m.stage === 'error' ? (sm.foot || qrCopy.RETRY_ACTION) : qrCopy.RETRY_ACTION; if (why.textContent !== whyText) why.textContent = whyText;
+  const footText = inTile ? '' : sm.foot;
+  /* 「使用网页登录」浅灰按钮是兜底（作者 10-21 定乙：黑底在这套界面里是主操作，备选不该比扫码更重）：Steam／OPPO／VIVO 才有。获取中、重试中、待扫码、任何失败都在——
+     二维码出不来、连不上、过期、被拒时正是要它的时候；只在授权正往成功走（已扫待确认、风控、账号校验、登录游戏）时让位，那时切去网页会打断，
+     左下角改写进度。箭头与步骤圆圈同列、文字与步骤文字同一左边线 */
+  const wl = q(el, '.wl') as HTMLElement; const showWeb = Boolean(card.web) && WEB_LOGIN_PROVIDERS.has(m.provider) && WEB_FALLBACK_STAGES.has(m.stage);
+  if (wl.hidden === showWeb) { wl.hidden = !showWeb; if (showWeb) armWeb(wl); }
   const foot = q(el, '.qst'); if (foot.textContent !== footText) { foot.getAnimations().forEach(a => a.cancel()); foot.textContent = footText; if (footText) foot.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 220, easing: 'ease-out' }); } (q(el, '.dlg') as HTMLElement).dataset.stage = m.stage;
 }
-function qrPrompt(m: QrModel, onCancel?: () => void, onRetry?: () => void, tabId?: number) {
+const WEB_LOGIN_PROVIDERS = new Set(['Steam 扫码登录', 'OPPO 扫码登录', 'VIVO 扫码登录', '小米扫码登录', 'WeGame - QQ', '华为扫码登录', '荣耀扫码登录']);
+const WEB_FALLBACK_STAGES = new Set(['loading', 'retrying', 'scan', 'error']);
+const TILE_STAGES = new Set(['loading', 'retrying', 'error']);
+/* 按钮不随卡一起出来：稍等再淡入（作者 10-21，取代先灰后黑）；换码时重来一遍 */
+const WEB_ARM_MS = 500;
+function armWeb(b: HTMLElement) { clearTimeout((b as any)._arm); b.classList.add('arming'); (b as any)._arm = setTimeout(() => b.classList.remove('arming'), WEB_ARM_MS); }
+/* 网页登录浮层的外框（作者 10-21 定：窗口内浮层；官方页出来时扫码卡藏起来）。页面区是主进程放上来的视图，这里只画外框、报页面区位置 */
+let webSheetEl: HTMLElement | null = null; let webSheetOff: (() => void) | null = null;
+function webSheet(tabId: number, opts: { title: string; provider?: string; width?: number } | null, onRect?: (r: { x: number; y: number; w: number; h: number }) => void, onClose?: () => void) {
+  const card = qrCards.get(tabId);
+  if (!opts) {
+    webSheetOff?.(); webSheetOff = null;
+    const el = webSheetEl; webSheetEl = null; if (el) { el.classList.remove('in'); setTimeout(() => el.remove(), 160); }
+    if (card) { card.webOpen = false; syncCardTabs(winOfTab(tabId)); }
+    setCover('web', false); return;
+  }
+  const vp = document.querySelector('.win #viewport') as HTMLElement; if (!vp) return;
+  webSheetEl?.remove(); webSheetOff?.();
+  const el = document.createElement('div'); el.className = 'ws-scrim';
+  /* 外框照外壳：32 高灰条＋渠道图标＋标题，右侧关闭键同标题栏右上角的样式；页面区三边内缩 3、1px 边线、圆角 6，和游戏区一样 */
+  el.innerHTML = `<div class="ws" role="dialog"><div class="hd"><img class="bi" alt="" hidden><span class="t"></span><span class="src">官方网页</span><span class="wsx" data-tip="关闭" data-key="Esc">${S.close}</span></div><div class="page"></div></div>`;
+  q(el, '.t').textContent = opts.title;
+  if (opts.width && opts.width !== 440) (q(el, '.ws') as HTMLElement).style.width = `${opts.width + 6}px`; /* 宽屏账号页（华为、荣耀） */
+  const icon = BRAND_ICON[opts.provider || '']; const bi = q(el, '.bi') as unknown as HTMLImageElement; if (icon) { bi.src = icon; bi.hidden = false; }
+  (q(el, '.wsx') as HTMLElement).onclick = e => { e.stopPropagation(); onClose?.(); };
+  vp.append(el); webSheetEl = el;
+  if (card) { card.webOpen = true; syncCardTabs(winOfTab(tabId)); }
+  setCover('web', true);
+  /* chrome 视图要等盖满之后才是整窗大小：每次尺寸变化都报一次，主进程只认像样的尺寸 */
+  const report = () => { const r = q(el, '.page').getBoundingClientRect(); if (r.height > 80) onRect?.({ x: r.left + 1, y: r.top + 1, w: r.width - 2, h: r.height - 2 }); }; /* 视图落在边线内 1px，同游戏视图 */
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } };
+  window.addEventListener('resize', report); document.addEventListener('keydown', onKey);
+  webSheetOff = () => { window.removeEventListener('resize', report); document.removeEventListener('keydown', onKey); };
+  requestAnimationFrame(() => { el.classList.add('in'); report(); });
+}
+function qrPrompt(m: QrModel, onCancel?: () => void, onRetry?: () => void, tabId?: number, onWeb?: () => void) {
   const vp = document.querySelector('.win #viewport') as HTMLElement; const key = tabId ?? null;
   const old = qrCards.get(key); if (old) { qrCards.delete(key); old.el.remove(); } /* 同一标签重开：直接换掉；别的标签的卡、对话框都不碰 */
-  const scrim = document.createElement('div'); scrim.className = 'scrim center qr-scrim'; scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i></div><div class="retry"><button class="rb" type="button">${S.refresh || S.update || ''}<span></span></button></div></div></div>`;
-  const card: QrCard = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false };
+  const scrim = document.createElement('div'); scrim.className = 'scrim center qr-scrim'; scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><button class="tb wl" type="button" hidden>${S.arrowUpRight}<span>使用网页登录</span></button><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i><span class="ovt"></span></div><div class="retry"><button class="rb" type="button" aria-label="${qrCopy.RETRY_ACTION}">${S.refresh || S.update || ''}<span></span></button></div></div></div>`;
+  const card: QrCard = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false, web: onWeb || null, webOpen: false };
+  (q(scrim, '.wl') as HTMLElement).onclick = e => { e.stopPropagation(); card.web?.(); };
   const cancel = () => { const cb = card.cancel; closeQr(tabId); cb?.(); };
   (q(scrim, '.rb span') as HTMLElement).textContent = qrCopy.RETRY_ACTION;
   (q(scrim, '.rb') as HTMLElement).onclick = e => { e.stopPropagation(); if ((q(scrim, '.dlg') as HTMLElement).dataset.stage === 'error') card.retry?.(); };
@@ -694,7 +768,7 @@ function rowMenu(w: Win, anchor: HTMLElement, items: Array<[string, string, () =
   m.textContent = '';
   for (const [icon, label, fn, disabled] of items) { const it = document.createElement('div'); it.className = 'item' + (disabled ? ' disabled' : ''); it.innerHTML = `<i>${icon}</i><span></span>`; q(it, 'span').textContent = label; if (!disabled) it.onclick = ev => { ev.stopPropagation(); closeAll(); fn(); }; m.append(it); }
   // 右缘对齐到 ⋮ 的字形而不是按钮盒：按钮 28 宽、字形约 14，向内收 7；下方留 6
-  anchor.classList.add('open'); const r = anchor.getBoundingClientRect(), wr = el.getBoundingClientRect(); m.hidden = false; m.style.left = (r.right - 7 - wr.left - m.offsetWidth) + 'px'; m.style.top = (r.bottom - wr.top + 6) + 'px';
+  anchor.classList.add('open'); const r = anchor.getBoundingClientRect(), wr = el.getBoundingClientRect(); cancelLeave(m); m.hidden = false; m.style.left = (r.right - 7 - wr.left - m.offsetWidth) + 'px'; m.style.top = (r.bottom - wr.top + 6) + 'px';
 }
 function installPluginDialog(rerender: () => void) {
   const box = document.createElement('div'); box.className = 'manual wide'; box.innerHTML = `<div class="pick"><button type="button" class="pk" data-tip="选择文件">${S.folder}</button><input type="text" placeholder="粘贴 user.js 链接，或从本机选择文件"></div>`;
@@ -751,6 +825,6 @@ function renderAbout(pg: HTMLElement) {
     openTab(w, makeTab({ entry: info.entry, provider: info.provider || null, nick: info.nick || '', muted: Boolean(info.muted), born: true }), idx, { slot: info.slot, adopt: true });
     render(w);
   }
-  return { wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
+  return { webSheet, wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
 }
 export = mountChrome;

@@ -9,7 +9,7 @@ interface Window {
   __JND_META_RUNTIME_BOOTING?: boolean;
   __JND_EARLY_ACCOUNT_MESSAGES?: unknown[];
   __JND_XIAOCHAO_UPDATE_ADOPTED?: boolean;
-  __JND_UNIFIED_LOGIN?: { version: string; providers: readonly string[]; start(provider: string): Promise<unknown>; cancel(): void; get(): any; subscribe(listener: (state: any) => void): () => void };
+  __JND_UNIFIED_LOGIN?: { version: string; providers: readonly string[]; start(provider: string): Promise<unknown>; webProviders?: readonly string[]; webURL?(provider: string): string | Promise<string>; webFinish?(provider: string, result: Record<string, string>): Promise<unknown>; cancel(): void; get(): any; subscribe(listener: (state: any) => void): () => void };
   __JND_MICRO_RECOVER?: () => void;
   SGSMODULE?: any;
 }

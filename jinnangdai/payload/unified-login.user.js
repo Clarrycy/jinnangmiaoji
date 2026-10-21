@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         统一登录器
 // @namespace    jinnangdai.wegame.standalone
-// @version      1.0.4
+// @version      1.0.8
 // @match        https://web.sanguosha.com/login/index.html*
 // @match        https://web.sanguosha.com/10/pc/index.php*
 // @match        https://web.sanguosha.com/10/pc/bilibiliWD_index.php*
@@ -72,7 +72,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '1.0.4';
+  const VERSION = '1.0.8';
   const ORIGIN = 'https://web.sanguosha.com';
   const SESSION_KEY = 'wegame.qq.session.v1';
   const HANDOFF_KEY = 'wegame.qq.handoff.v1';
@@ -1782,6 +1782,11 @@
     assert(realName.data?.accountRealName === true, 'VIVO_REAL_NAME_REQUIRED', stage);
     assert(!value.extraData?.minor && !value.extraData?.forceNative, 'VIVO_NATIVE_CONFIRMATION_REQUIRED', stage);
     const accounts = value.data?.subAccounts;
+    // 多账号诊断（作者 10-21 vivo 玩家反馈）：只记个数、标记与字段名，不记任何账号标识
+    console.info('[统一登录器]', JSON.stringify({version: VERSION, stage: 'vivo_account_shape', realName: realName.data?.accountRealName === true,
+      minor: Boolean(value.extraData?.minor), forceNative: Boolean(value.extraData?.forceNative), subAccounts: Array.isArray(accounts) ? accounts.length : null,
+      lastLogin: Array.isArray(accounts) ? accounts.map(x => x?.lastLogin === true) : null, frozen: Array.isArray(accounts) ? accounts.map(x => Boolean(x?.frozenFlag)) : null,
+      fields: Array.isArray(accounts) && accounts[0] ? Object.keys(accounts[0]).sort() : null, dataKeys: Object.keys(value.data || {}).sort(), extraKeys: Object.keys(value.extraData || {}).sort()}));
     assert(Array.isArray(accounts) && accounts.length === 1 && accounts[0].lastLogin === true,
       'VIVO_ACCOUNT_SELECTION_REQUIRED', stage);
     assert(!accounts[0].frozenFlag, 'VIVO_ACCOUNT_UNAVAILABLE', stage);
@@ -1976,6 +1981,7 @@
       expires: Math.min(claims.exp * 1000, Date.now() + tokens.expires_in * 1000)};
   }
   async function authorizeHuawei(a) {
+    if (a.huawei?.webCallback) { await huaweiTokens(a, huaweiCode(a, a.huawei.webCallback)); return; } /* 网页登录：回调里的 code 直接换令牌 */
     if (!a.huawei?.qr) await prepareHuawei(a);
     const h = a.huawei;
     assert(!h.confirmationUsed, 'HUAWEI_CONFIRMATION_CONSUMED', 'huawei_auth');
@@ -2017,9 +2023,11 @@
       r = await huaweiRequest(a, 'huawei_authorize', HUAWEI_AUTH + '/oauth2/ajax/authorizeConfirm',
         {...sig, ...(h.cVersion ? {cVersion: h.cVersion} : {}), authorize_scope: Object.keys(scopes).join(' '), pageToken: h.si.pageToken});
     }
-    const code = huaweiCode(a, r.code);
+    await huaweiTokens(a, huaweiCode(a, r.code));
+  }
+  async function huaweiTokens(a, code) {
     const tokens = await huaweiRequest(a, 'huawei_token', HUAWEI_AUTH + '/oauth2/v3/token',
-      {grant_type: 'authorization_code', client_id: HUAWEI_APP, code, redirect_uri: HUAWEI_CALLBACK, code_verifier: h.verifier});
+      {grant_type: 'authorization_code', client_id: HUAWEI_APP, code, redirect_uri: HUAWEI_CALLBACK, code_verifier: a.huawei.verifier});
     const keys = await huaweiRequest(a, 'huawei_keys', 'https://oauth-login.cloud.huawei.com/oauth2/v3/certs');
     const auth = await huaweiIdentity(a, tokens, keys);
     a.cookies.clear(); a.huawei = {auth};
@@ -2129,6 +2137,7 @@
     ui.oppoLink.href = h.qr.content; ui.oppoLink.textContent = h.qr.content; ui.oppoLink.hidden = false;
   }
   async function authorizeHonor(a) {
+    if (a.honor?.webCode) { await honorGameLogin(a, a.honor.webCode, ''); return; } /* 网页登录：回调 code 直接走游戏登录 */
     if (!a.honor?.qr) await prepareHonor(a);
     const h = a.honor; assert(!h.confirmationUsed, 'HONOR_CONFIRMATION_CONSUMED', 'honor_auth');
     let r;
@@ -2172,13 +2181,16 @@
     service = '';
     // Use the direct HTTPS token response, not unverified JWT contents.
     fields(token, ['open_id', 'code'], 'honor_token');
+    await honorGameLogin(a, token.code, token.open_id);
+  }
+  async function honorGameLogin(a, oauthCode, openId) {
     const result = await honorJSON(a, 'honor_game', HONOR_GAME + '/game/union/sdk/v1/aggregate/login',
-      {amsPackageName: 'com.hihonor.gameassistant.gameservice', appId: HONOR_APP, oauthCode: token.code,
+      {amsPackageName: 'com.hihonor.gameassistant.gameservice', appId: HONOR_APP, oauthCode,
         realNameAuthMode: 0, scene: 0, trackingStr: '', tInfo: {pName: 'com.yoka.sgs.x.honor',
           apkVer: 20014301, apkVerName: '2.0.14.301', language: 'zh-CN'}}, true);
     const login = result.loginData, data = login?.data, u = data?.unionToken;
     assert(login?.errorCode === 0, 'HONOR_GAME_REJECTED', 'honor_game');
-    assert(data?.appId === HONOR_APP && u?.openId === token.open_id, 'ACCOUNT_MISMATCH', 'honor_game');
+    assert(data?.appId === HONOR_APP && (!openId || u?.openId === openId), 'ACCOUNT_MISMATCH', 'honor_game'); /* 网页登录没有扫码链上的 open_id 可对 */
     assert(data.realInfo?.hasRealName === true && data.realInfo?.isAdult === true && !data.isChildAccount,
       'NATIVE_CONFIRMATION_REQUIRED', 'honor_game');
     fields(u, ['openId', 'token'], 'honor_game');
@@ -2484,7 +2496,7 @@
       await waitForSteam(a);
     }
     if (!a.steam) await authorizeSteam(a);
-    a.steam = validateSteamAuth(a.steam);
+    if (!a.steam.web) a.steam = validateSteamAuth(a.steam); /* 网页登录的令牌直接来自 Steam 回调，没有扫码那条链上的 steamID 可对 */
     if (!a.grant) {
       a.stage = 'steam_grant';
       const r = await transport(a, 'https://10th-ly-login.sanguosha.com/steam/oauth/login',
@@ -2992,6 +3004,8 @@
   function oppoGameCredentials(value) {
     const stage = 'oppo_game_account';
     assert(value && String(value.code) === '200', 'OPPO_GAME_ACCOUNT_REJECTED', stage);
+    console.info('[统一登录器]', JSON.stringify({version: VERSION, stage: 'oppo_game_account_shape', gameAccounts: Array.isArray(value?.gameAccounts) ? value.gameAccounts.length : null,
+      fields: Array.isArray(value?.gameAccounts) && value.gameAccounts[0] ? Object.keys(value.gameAccounts[0]).sort() : null}));
     assert(Array.isArray(value.gameAccounts) && value.gameAccounts.length === 1,
       'OPPO_GAME_ACCOUNT_SELECTION_REQUIRED', stage);
     const game = value.gameAccounts[0];
@@ -3545,10 +3559,109 @@
     catch (_) { window.name = ''; GM_deleteValue(HANDOFF_KEY); throw failure('NAVIGATION_FAILED', 'handoff'); }
     delete a.grant; delete a.session;
   }
-  async function start(provider = 'qq') {
+  // 网页登录（作者 10-21：OPPO／vivo／Steam 扫码卡上的「使用网页登录」）：官方登录页由壳在同一账号容器的浮层里打开，
+  // 走完后壳把结果交回来（Steam 回调地址、OPPO 回调 code、vivo 选定子账号后写下的两个 Cookie），从这里接上扫码之后的同一条换取链。
+  const HONOR_WEB_CALLBACK = 'hms://redirect_url';
+  const WEB_PROVIDERS = new Set(['steam', 'oppo', 'vivo', 'xiaomi', 'qq', 'huawei', 'honor']);
+  const webStates = new Map();
+  // 只为拿 QQ 电脑版登录页地址发一次请求：不挂在扫码尝试上（出错后尝试可能已清掉），只允许 QQ 域名
+  function webFetchText(url, hosts) {
+    parseURL(url, hosts, 'web_login');
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(failure('REQUEST_TIMEOUT', 'web_login')), 15000);
+      GM_xmlhttpRequest({method: 'GET', url, timeout: 15000,
+        onload: r => { clearTimeout(timer); r.status >= 200 && r.status < 300 ? resolve(r.responseText || '') : reject(failure('HTTP_' + r.status, 'web_login')); },
+        onerror: () => { clearTimeout(timer); reject(failure('NETWORK_ERROR', 'web_login')); },
+        ontimeout: () => { clearTimeout(timer); reject(failure('REQUEST_TIMEOUT', 'web_login')); }});
+    });
+  }
+  async function webURL(provider) {
+    assert(WEB_PROVIDERS.has(provider), 'PROVIDER_UNAVAILABLE', 'web_login');
+    // QQ：openmobile 授权页本身是手机页（会唤起手机 QQ）；取它内嵌的 ptlogin 登录页，关掉强制二维码＝账号密码登录。h5sig 不覆盖 force_qr（实测）
+    if (provider === 'qq') {
+      const state = random(); webStates.set('qq', state);
+      const html = await webFetchText(queryURL('https://openmobile.qq.com/oauth2.0/m_authorize', {client_id: QQ_APP, scope: 'get_simple_userinfo',
+        response_type: 'token', redirect_uri: 'auth://tauth.qq.com/', display: 'mobile', style: 'qr', pf: 'openmobile_android', isadd: '1',
+        cancel_display: '1', switch: '1', compat_v: '1', state}), QQ_HOSTS);
+      const match = /var\s+src\s*=\s*"([^"\n]+)"/.exec(html); assert(match, 'QQ_AUTH_PAGE_CHANGED', 'web_login');
+      const u = parseURL(decodeJS(match[1]), QQ_HOSTS, 'web_login');
+      assert(u.hostname === 'xui.ptlogin2.qq.com' && u.pathname === '/cgi-bin/xlogin' && u.searchParams.get('pt_3rd_aid') === QQ_APP &&
+        u.searchParams.get('state') === state, 'QQ_APPLICATION_MISMATCH', 'web_login');
+      u.searchParams.set('force_qr', '0');
+      return u.href;
+    }
+    // 华为：扫码路径同一个 OAuth 授权页（PKCE＋nonce），网页上密码／短信／扫码都在；校验值留着换令牌用
+    if (provider === 'huawei') {
+      const state = random(), verifier = random() + random(), nonce = random();
+      webStates.set('huawei', {state, verifier, nonce});
+      const challenge = huaweiBase64URL(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+      return queryURL(HUAWEI_AUTH + '/oauth2/v3/authorize', {access_type: 'offline', response_type: 'code', client_id: HUAWEI_APP,
+        ui_locales: 'zh-CN', redirect_uri: HUAWEI_CALLBACK, state, scope: 'openid profile', nonce, include_granted_scopes: 'true',
+        code_challenge_method: 'S256', code_challenge: challenge});
+    }
+    // 荣耀：网页 OAuth 授权页（扫码路径走 App 接口，不经此页）。回调 hms://redirect_url 实测被接受（zzz:// 被拒），code 能否直接用于游戏登录待真机
+    if (provider === 'honor') {
+      const state = random(); webStates.set('honor', state);
+      return queryURL(HONOR_AUTH + '/oauth2/v3/authorize', {response_type: 'code', client_id: HONOR_APP, redirect_uri: HONOR_WEB_CALLBACK,
+        state, scope: 'openid profile', access_type: 'offline', ui_locales: 'zh-CN'});
+    }
+    if (provider === 'steam') {
+      const state = random(); webStates.set('steam', state);
+      return queryURL('https://steamcommunity.com/oauth/login', {mobileminimal: '1', response_type: 'token', client_id: STEAM_APP, state, l: 'schinese'});
+    }
+    // 小米：扫码路径同一个 OAuth 授权页，_locale=zh_CN 即国内界面
+    if (provider === 'xiaomi') {
+      const state = random(); webStates.set('xiaomi', state);
+      return queryURL('https://account.xiaomi.com/oauth2/authorize', {client_id: XIAOMI_OAUTH_APP, response_type: 'code', scope: '1 3',
+        redirect_uri: XIAOMI_CALLBACK, state, _locale: 'zh_CN'});
+    }
+    // OPPO 账号页按访问者 IP 分国内版／国际版（globalConfig.js 的 globalIsExp），同一地址；id-cn 没有网页登录页
+    if (provider === 'oppo') return queryURL('https://id.heytap.com/identity/web/v1/authn/auth-and-callback',
+      {bizAppKey: OPPO_BIZ, callback: OPPO_CALLBACK, language: 'zh-CN', toRegisterPage: 'false'});
+    return 'https://joint.vivo.com.cn/game-subaccount-login/?from=login';
+  }
+  function applyWebResult(a, provider, web) {
+    const stage = provider + '_web';
+    assert(WEB_PROVIDERS.has(provider) && web && typeof web === 'object', 'WEB_RESULT_INVALID', stage);
+    lifecycle('login.web', {provider});
+    if (provider === 'steam') {
+      const u = parseURL(String(web.href || ''), new Set(['10th-ly-login.sanguosha.com']), stage);
+      assert(u.pathname === '/steam/oauth/callback.html', 'WEB_RESULT_INVALID', stage);
+      const p = uniqueParams(u.hash.slice(1), stage);
+      assert(p.state && p.state === webStates.get('steam'), 'STEAM_STATE_MISMATCH', stage); webStates.delete('steam');
+      const {access_token} = fields(p, ['access_token'], stage);
+      const seconds = Number(p.expires_in) || 0;
+      assert(seconds >= 0 && seconds < 1e10, 'STEAM_TOKEN_SCHEMA_CHANGED', stage);
+      a.steam = {access_token, steamID: /^\d{17}$/.test(p.steamid || '') ? p.steamid : '', expires: seconds ? Date.now() + seconds * 1000 : 0,
+        retainedUntil: Date.now() + 86400000, web: true};
+    } else if (provider === 'xiaomi' || provider === 'qq' || provider === 'honor') {
+      const state = webStates.get(provider); assert(state, 'WEB_RESULT_INVALID', stage); webStates.delete(provider);
+      a.state = state; const href = String(web.href || '');
+      if (provider === 'xiaomi') a.xiaomiCode = xiaomiCallback(a, href);
+      else if (provider === 'honor') {
+        let u; try { u = new URL(href); } catch (_) { throw failure('WEB_RESULT_INVALID', stage); }
+        assert(u.href.startsWith(HONOR_WEB_CALLBACK), 'WEB_RESULT_INVALID', stage);
+        const p = uniqueParams(u.search.slice(1), stage); assert(p.state === state && !p.error, 'HONOR_STATE_MISMATCH', stage);
+        a.honor = {webCode: fields(p, ['code'], stage).code};
+      } else if (isProxy(href)) a.redirect = href; /* QQ 中转页：交给 redeem 取回调 */
+      else a.qq = callback(a, href); /* QQ auth://tauth.qq.com/ 回调：带 openid、access_token，对 state */
+    } else if (provider === 'huawei') {
+      const w = webStates.get('huawei'); assert(w, 'WEB_RESULT_INVALID', stage); webStates.delete('huawei');
+      a.state = w.state; a.huawei = {verifier: w.verifier, nonce: w.nonce, webCallback: String(web.href || '')};
+    } else if (provider === 'oppo') {
+      const code = String(web.code || '');
+      assert(/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(code), 'WEB_RESULT_INVALID', stage);
+      a.oppoCode = code;
+    } else {
+      const uid = String(web.subOpenId || ''), session = String(web.openToken || '');
+      assert(/^[A-Za-z0-9+/=_.~-]{1,2048}$/.test(uid) && /^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(session), 'WEB_RESULT_INVALID', stage);
+      a.vivo = {uid, session, username: ''};
+    }
+  }
+  async function start(provider = 'qq', web = null) {
     assert(['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor'].includes(provider), 'PROVIDER_UNAVAILABLE', 'setup');
     if (busy) return;
-    if (!attempt && remembered()?.provider === provider) { await resume(); return; }
+    if (!web && !attempt && remembered()?.provider === provider) { await resume(); return; }
     if (middle && (attempt?.provider || 'qq') === provider && attempt?.grant && Date.now() < attempt.grantExpires) {
       middle.node.scrollIntoView({block: 'center'}); return;
     }
@@ -3556,13 +3669,14 @@
     lifecycle('login.start', {provider});
     let mine = null; // 这次 start 跑的尝试；被取消或被新尝试顶替后，它残留的异步链抛出的错不是当前的错
     try {
-      if (!attempt || (attempt.provider || 'qq') !== provider || Date.now() >= attempt.expires || attempt.renewalFailed) {
+      if (web || !attempt || (attempt.provider || 'qq') !== provider || Date.now() >= attempt.expires || attempt.renewalFailed) {
         if (attempt?.renewalFailed && attempt.provider === provider) forget(attempt, 'RENEWAL_FAILED_RESCAN');
         restoreMiddle(); clearAttempt(); await acquireLock();
         assert(!disposed, 'PAGE_CLOSED', 'setup');
         attempt = {state: random(), provider, device: random(), expires: Date.now() + (provider === 'xiaomi' ? 300000 : 180000),
           stage: 'setup', cookies: new Cookies(), requests: new Set()};
-        if (provider === 'steam') restoreSteamCheckpoint(attempt);
+        if (web) applyWebResult(attempt, provider, web);
+        else if (provider === 'steam') restoreSteamCheckpoint(attempt);
       }
       if (!releaseLock) await acquireLock();
       const a = attempt; mine = a;
@@ -3725,6 +3839,9 @@
         notify,
         providers: Object.freeze(['qq', 'wx', 'steam', 'oppo', 'vivo', 'huawei', 'honor', 'xiaomi', 'bilibili']),
         start(provider) { microError = null; const p = start(provider); notify(); return Promise.resolve(p).finally(notify); },
+        webProviders: Object.freeze([...WEB_PROVIDERS]),
+        webURL,
+        webFinish(provider, result) { microError = null; const p = start(provider, result); notify(); return Promise.resolve(p).finally(notify); },
         cancel() { microError = null; restoreMiddle(); clearAttempt(); ui.output.textContent = ''; notify(); },
         get: snapshot,
         subscribe(listener) { listeners.add(listener); try { listener(snapshot()); } catch (_) {} return () => listeners.delete(listener); },

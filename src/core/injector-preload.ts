@@ -227,6 +227,15 @@ export = function startInjector(config) {
     style.id = 'jnd-micro-landing-fit';
     // 能放下时隐藏滚动条；放不下（长门户页）时恢复滚动，不缩到看不清。
     const HIDE = 'html,body{overflow:hidden!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+    /* 整页缩放只给官服登录页（固定 1600×900 的一屏页，作者 10-19 定）。第三方门户是可以滚的长网页：只藏滚动条、正常滚，不缩放（作者 10-21）。
+       原来门户也按「缩到放得下」处理：360 首页加载时量到 1233 就缩到 73% 并锁住滚动，内容后长到 1521 也滚不动；
+       加了「内容变高就重量」之后，缩放本身改变版面又触发重量，在「缩 62% 锁住」和「可滚」之间来回翻（真机日志 08:09 起每秒数次） */
+    if (!isOfficialLoginPage(currentUrl() || new URL('about:blank'))) {
+      style.textContent = '::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+      const mountPlain = () => { const root = document.head || document.documentElement; if (!root) return false; if (!style.isConnected) root.append(style); return true; };
+      if (!mountPlain()) { const mo = new MutationObserver(() => { if (mountPlain()) mo.disconnect(); }); mo.observe(document, { childList: true, subtree: true }); }
+      return;
+    }
     style.textContent = HIDE;
     // document-start 时 <html> 还不存在：等它出现立刻挂上（先于首帧，避免滚动条闪现导致内容左右跳）。
     const mount = () => {
@@ -298,6 +307,16 @@ export = function startInjector(config) {
     setTimeout(fit, 2000);
   }
 
+  // 落地页自动唤起登录（作者 10-21）：4399 官网未登录（顶栏 .my_unlogin 可见）时直接弹它自己的登录框 UniLogin.showPopupLogin，
+  // 不用玩家先找「登录」；每次加载只弹一次，关掉就不再弹，已登录不弹。函数在页面主世界里，所以经 webFrame 执行。
+  function installLandingAutoLogin(url: URL) {
+    if (url.hostname !== 'my.4399.com' || !/^\/yxsgs\/?$/.test(url.pathname)) return;
+    const script = `(() => { let n = 0; const t = setInterval(() => { n += 1; const u = document.querySelector('.my_unlogin'); const api = window.UniLogin;
+      if (api && typeof api.showPopupLogin === 'function' && u) { clearInterval(t); if (u.offsetWidth || u.offsetHeight) api.showPopupLogin('', '', true); }
+      else if (n > 60) clearInterval(t); }, 250); })();`;
+    void webFrame.executeJavaScript(script, true).catch(error => report('warn', `4399 登录框唤起失败：${error?.message || error}`));
+  }
+
   // 官方登录页：把统一登录器的二维码／状态投影给壳（扫码窗），并接受壳的发起／取消。
   const OFFICIAL_LOGIN_PATHS = ['/login/index.html', '/login/x/index'];
   function isOfficialLoginPage(url) {
@@ -322,7 +341,7 @@ export = function startInjector(config) {
     setInterval(tick, 500);
   }
   function installLoginBridge() {
-    type LoginRequest = { provider: string; requestId: number };
+    type LoginRequest = { provider: string; requestId: number; web?: Record<string, string> | null };
     let unsubscribe = null;
     let pending: LoginRequest | null = null, current: LoginRequest | null = null;
     let draining = false, accepting = false, revision = 0;
@@ -343,7 +362,7 @@ export = function startInjector(config) {
           while (bridge.get().busy && ownRevision === revision) await new Promise(resolve => setTimeout(resolve, 100));
           if (ownRevision !== revision) continue;
           current = request; accepting = true;
-          try { await bridge.start(request.provider); }
+          try { await (request.web && bridge.webFinish ? bridge.webFinish(request.provider, request.web) : bridge.start(request.provider)); }
           catch (error) {
             if (ownRevision === revision) forward({ provider: request.provider, stage: '', qr: '', text: '', error: { code: 'LOGIN_START_FAILED' } });
             report('warn', `统一登录器发起失败：${error?.message || error}`);
@@ -371,6 +390,19 @@ export = function startInjector(config) {
       if (!request || typeof request.provider !== 'string' || !Number.isSafeInteger(request.requestId)) return;
       revision += 1; accepting = false; pending = { provider: request.provider, requestId: request.requestId };
       // 先关消息入口再取消，取消过程中的旧快照也不能贴到新标题下。
+      try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
+      if (attach()) void drain();
+    });
+    // 网页登录（作者 10-21）：壳要官方登录页地址（Steam 的地址绑定这次的 state）；登录页走完后壳把结果交回来，按同一套请求编号接着换取
+    ipcRenderer.on('jnd-login-web-url', (_event, request) => {
+      const reply = (url: string, error: string) => { try { ipcRenderer.send('jnd-login-web-url-result', { reqId: request?.reqId, url, error }); } catch (_) {} };
+      /* QQ 要先请求一次才拿得到登录页地址，所以是异步的 */
+      Promise.resolve().then(() => window.__JND_UNIFIED_LOGIN?.webURL?.(String(request?.provider || '')))
+        .then(url => reply(String(url || ''), ''), e => reply('', String(e?.message || e?.code || e)));
+    });
+    ipcRenderer.on('jnd-login-web-finish', (_event, request) => {
+      if (!request || typeof request.provider !== 'string' || !Number.isSafeInteger(request.requestId) || !request.web || typeof request.web !== 'object') return;
+      revision += 1; accepting = false; pending = { provider: request.provider, requestId: request.requestId, web: request.web };
       try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
       if (attach()) void drain();
     });
@@ -562,6 +594,7 @@ export = function startInjector(config) {
       if (process.isMainFrame && /^https?:$/.test(url.protocol)) {
         try { installLandingNetworkGuard(); } catch (error) { report('warn', `落地页网络守卫失败：${error.message}`); }
         try { installLandingFit(); } catch (error) { report('warn', `落地页适配失败：${error.message}`); }
+        try { installLandingAutoLogin(url); } catch (error) { report('warn', `落地页登录唤起失败：${error.message}`); }
       }
       return false;
     }

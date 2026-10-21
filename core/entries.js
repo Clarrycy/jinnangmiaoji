@@ -28,16 +28,6 @@ const ENTRIES = Object.freeze([
     verified: false,
     matches: (url) => /(^|\.)qqopenapp\.com$/i.test(url.hostname) && /\/pc\/qqLobby_index\.php/i.test(url.pathname)
   }),
-  Object.freeze({
-    id: "7k7k",
-    label: "7K7K",
-    entry: "https://h5.7k7k.com/game/960982bec2f555de44ea43ca8a7ef418",
-    verified: false,
-    // 原 web/H5GAMES.html 包装页在没有 7K7K 登录 cookie 时跳 /mb/.html 必 404；游戏页本身自带登录
-    // 收窄（作者 10-21）：/game/<gid> 是 7K7K 自家门户/详情页（移动 H5，带广告与适龄角标），不是游戏画布。
-    // 把它排除出游戏匹配，归为落地页走缩放/滚动/减法管线；真正的游戏画布（7K7K 其余路径或官方 /x|10|10th/pc）仍算游戏页。游戏画布路径未实机核实，待运行时验收。
-    matches: (url) => /(^|\.)7k7k\.com$/i.test(url.hostname) && !/^\/game(?:\/|$)/i.test(url.pathname) || isOfficial(url)
-  }),
   // 百度（作者 10-21）：原入口 /game?gameId= 就是游戏页本身（空页＋游戏 iframe，要登录才填），关掉登录框就一直空着；
   // 改用详情落地页 /gamedetail（「三国杀：一将成名-百度页游中心」：登录、选区进入游戏、公告）。游戏页只认 /game 这一个路径，落地页不注入。
   Object.freeze({
@@ -57,6 +47,18 @@ const ENTRIES = Object.freeze([
     matches: (url) => /(^|\.)sgsszn\.wan\.360\.cn$/i.test(url.hostname) && url.pathname === "/game_login.php" || isOfficial(url)
   })
 ]);
+const RETIRED_ENTRIES = Object.freeze([
+  Object.freeze({
+    id: "7k7k",
+    label: "7K7K",
+    entry: "https://h5.7k7k.com/game/960982bec2f555de44ea43ca8a7ef418",
+    verified: false,
+    // 原 web/H5GAMES.html 包装页在没有 7K7K 登录 cookie 时跳 /mb/.html 必 404；游戏页本身自带登录
+    // 收窄（作者 10-21）：/game/<gid> 是 7K7K 自家门户/详情页（移动 H5，带广告与适龄角标），不是游戏画布。
+    // 把它排除出游戏匹配，归为落地页走缩放/滚动/减法管线；真正的游戏画布（7K7K 其余路径或官方 /x|10|10th/pc）仍算游戏页。游戏画布路径未实机核实，待运行时验收。
+    matches: (url) => /(^|\.)7k7k\.com$/i.test(url.hostname) && !/^\/game(?:\/|$)/i.test(url.pathname) || isOfficial(url)
+  })
+]);
 const PROVIDERS = Object.freeze([
   Object.freeze({ id: "qq", label: "WeGame - QQ" }),
   Object.freeze({ id: "wx", label: "WeGame - 微信" }),
@@ -70,7 +72,8 @@ const PROVIDERS = Object.freeze([
   Object.freeze({ id: "honor", label: "荣耀扫码登录" })
 ]);
 const LANDING_TRIM = {
-  "web.sanguosha.com": ".down-banner,.game12-tips{display:none!important}",
+  // 官服登录页底图是 body 背景、按宽度铺（background-size:100% auto）：比 16:9 高的窗口和全屏下面露黑底（作者 10-21 Mac 全屏）。只认带背景视频的登录页，同域游戏页不碰
+  "web.sanguosha.com": ".down-banner,.game12-tips{display:none!important}html:has(#sgsBgVideo){height:100%}body:has(#sgsBgVideo){min-height:100%;background-size:cover!important;background-position:center!important}",
   "my.4399.com": ".wg-ad{display:none!important}"
 };
 function landingTrimCss(hostname) {
@@ -96,4 +99,4 @@ function matchesAnyEntry(url) {
 function entriesForRenderer() {
   return ENTRIES.map(({ id, label, verified, hostChannel }) => ({ id, label, verified, hostChannel: hostChannel || id }));
 }
-module.exports = { TEST_ORIGIN, ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, entriesForRenderer, isOfficial, landingTrimCss };
+module.exports = { TEST_ORIGIN, ENTRIES, RETIRED_ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, entriesForRenderer, isOfficial, landingTrimCss };

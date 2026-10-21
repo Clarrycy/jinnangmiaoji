@@ -50,6 +50,12 @@ function parseSetCookie(line, url) {
 function createGmRequestHost(options = {}) {
   const log = typeof options.log === "function" ? options.log : () => {
   };
+  const trace = (event) => {
+    try {
+      options.trace?.(event);
+    } catch (_) {
+    }
+  };
   const electronNet = options.net && typeof options.net.request === "function" && process.env.JND_GM_NODE !== "1" ? options.net : null;
   const tlsOptions = options.tlsOptions && typeof options.tlsOptions === "object" ? options.tlsOptions : {};
   const active = /* @__PURE__ */ new Map();
@@ -223,6 +229,7 @@ function createGmRequestHost(options = {}) {
         if (useSessionCookies) await persistCookies(context.session, response, url);
         const status = Number(response.statusCode || 0);
         const location = response.headers.location;
+        trace({ id, hop, method, url: url.href, reqHeaders: headers, reqData: data, status, location, resHeaders: response.headers, setCookie: response.headers["set-cookie"], contentType: String(response.headers["content-type"] || ""), body: request.binary ? body : body.toString("utf8") });
         if (!request.manualRedirect && [301, 302, 303, 307, 308].includes(status) && location) {
           if (hop >= MAX_REDIRECTS) throw new Error("重定向次数过多");
           const next = new URL(location, url);
@@ -259,6 +266,7 @@ function createGmRequestHost(options = {}) {
           u = new URL(String(input?.url || ""));
         } catch (_) {
         }
+        trace({ id, hop: -1, method: String(input?.method || "GET"), url: String(input?.url || ""), reqHeaders: input?.headers, reqData: input?.data, error: String(error?.message || error), kind });
         log("GM request failed", JSON.stringify({ id, kind, message: String(error?.message || error), host: u?.hostname, path: u?.pathname, method: input?.method || "GET", headers: Object.keys(input?.headers || {}), binary: input?.responseType === "arraybuffer", redirect: input?.redirect || "follow", anonymous: Boolean(input?.anonymous), cookie: typeof input?.cookie === "string" ? input.cookie.length : null, transport: electronNet ? "net" : "node" }));
         return { kind, status: 0, statusText: "", responseHeaders: "", finalUrl: String(input?.url || ""), error: String(error?.message || error) };
       }

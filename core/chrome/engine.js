@@ -6,7 +6,7 @@ const jsQR = require("jsqr");
 const qrcodegen = require("qrcode-generator");
 function mountChrome(opts) {
   const { S, ICON, SPEC, host } = opts;
-  const ENTRIES = ["官服", "4399", "QQ 大厅", "7K7K", "百度", "360"];
+  const ENTRIES = ["官服", "4399", "QQ 大厅", "百度", "360"];
   const PROVIDERS = ["WeGame - QQ", "WeGame - 微信", "bilibili 扫码登录", "Steam 扫码登录", "OPPO 扫码登录", "小米扫码登录", "VIVO 扫码登录", "华为扫码登录", "荣耀扫码登录"];
   const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "bilibili", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀" };
   const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
@@ -84,16 +84,23 @@ function mountChrome(opts) {
     if (settings.confirmClose && w.tabs.length >= 2) confirmCloseWindow(w.tabs.length, go);
     else go();
   }
+  const PASSIVE_COVER = /* @__PURE__ */ new Set(["tip", "toast", "leave", "web"]);
   const coverReasons = /* @__PURE__ */ new Set();
-  let coverSent = false;
+  let coverSent = false, keysSent = false, coverQueued = false;
   function setCover(reason, on) {
     if (on) coverReasons.add(reason);
     else coverReasons.delete(reason);
-    const full = coverReasons.size > 0;
-    if (full !== coverSent) {
-      coverSent = full;
-      host.cover?.(full);
-    }
+    if (coverQueued) return;
+    coverQueued = true;
+    queueMicrotask(() => {
+      coverQueued = false;
+      const full = coverReasons.size > 0, keys = [...coverReasons].some((r) => !PASSIVE_COVER.has(r));
+      if (full !== coverSent || keys !== keysSent) {
+        coverSent = full;
+        keysSent = keys;
+        host.cover?.(full, keys);
+      }
+    });
   }
   const chipWidthCache = {};
   let chipProbe = null;
@@ -213,10 +220,13 @@ function mountChrome(opts) {
       q(el, ".more").onclick = (e) => {
         e.stopPropagation();
         const m = q(el, ".amenu");
-        const open = m.hidden;
+        const open = m.hidden || leaving.has(m);
         closeAll();
-        m.hidden = !open;
-        setCover("menu", open);
+        if (open) {
+          cancelLeave(m);
+          m.hidden = false;
+          setCover("menu", true);
+        }
       };
       q(el, ".amenu").onclick = (e) => {
         e.stopPropagation();
@@ -567,11 +577,36 @@ function mountChrome(opts) {
       if (!s.moved && s.onClick) s.onClick();
     }
   };
+  const leaving = /* @__PURE__ */ new Map();
+  const MENU_SEL = ".menu,.amenu,.tlmenu";
+  function menusShowing() {
+    return [...document.querySelectorAll(MENU_SEL)].some((p) => !p.hidden && !leaving.has(p));
+  }
+  function cancelLeave(p) {
+    const t = leaving.get(p);
+    if (t === void 0) return;
+    clearTimeout(t);
+    leaving.delete(p);
+    p.classList.remove("leaving");
+    if (!leaving.size) setCover("leave", false);
+  }
+  function hideMenu(p) {
+    if (p.hidden || leaving.has(p)) return;
+    p.classList.add("leaving");
+    setCover("leave", true);
+    leaving.set(p, window.setTimeout(() => {
+      leaving.delete(p);
+      p.classList.remove("leaving");
+      p.hidden = true;
+      if (!leaving.size) setCover("leave", false);
+    }, 110));
+    if (!menusShowing()) setCover("menu", false);
+  }
   function closeAll() {
-    for (const p of document.querySelectorAll(".menu,.amenu,.tlmenu")) p.hidden = true;
+    for (const p of document.querySelectorAll(MENU_SEL)) hideMenu(p);
     for (const t of document.querySelectorAll(".tab.ctx")) t.classList.remove("ctx");
     document.querySelectorAll(".entry.open,.ib.s.op.open").forEach((x) => x.classList.remove("open"));
-    setCover("menu", false);
+    if (!menusShowing()) setCover("menu", false);
   }
   function menuItem(label, onClick, extra = {}) {
     const d = document.createElement("div");
@@ -633,7 +668,10 @@ function mountChrome(opts) {
         }
       };
       m.append(other);
-      sub.hidden = !subOpen;
+      if (subOpen) {
+        cancelLeave(sub);
+        sub.hidden = false;
+      } else hideMenu(sub);
       const pickProvider = (p, logout) => {
         t.provider = p;
         t.entry = PROVIDER_CHIP[p];
@@ -657,6 +695,7 @@ function mountChrome(opts) {
         sub.style.top = r.bottom - wr.top + 2 + other.offsetTop + "px";
       }
     };
+    cancelLeave(m);
     draw();
     m.hidden = false;
     m.style.left = r.left - wr.left - 8 + "px";
@@ -741,6 +780,7 @@ function mountChrome(opts) {
         fn();
       }, { disabled }));
     }
+    cancelLeave(m);
     m.hidden = false;
     m.style.left = Math.min(x - wr.left, wr.width - 218) + "px";
     m.style.top = y - wr.top + "px";
@@ -749,7 +789,7 @@ function mountChrome(opts) {
   function toggleTabList(w) {
     const el = winEl(w);
     const m = q(el, ".tlmenu");
-    const open = m && !m.hidden;
+    const open = m && !m.hidden && !leaving.has(m);
     closeAll();
     if (open) return;
     fillTabList(w);
@@ -767,6 +807,7 @@ function mountChrome(opts) {
       m.hidden = true;
       return;
     }
+    cancelLeave(m);
     m.textContent = "";
     m.hidden = false;
     setCover("menu", true);
@@ -885,6 +926,7 @@ function mountChrome(opts) {
       if (hasList(w)) toggleTabList(w);
     } else if (name === "menu") q(winEl(w), ".more").click();
     else if (name === "fullscreen") host.window?.command("fullscreen");
+    else if (name === "recorder") host.window?.command("recorder");
     else if (name === "pm" || name === "settings" || name === "update" || name === "about") {
       closeAll();
       openPage(w, name);
@@ -897,6 +939,7 @@ function mountChrome(opts) {
   }
   function shortcutOf(e) {
     const k = e.key.toLowerCase(), c = e.ctrlKey || e.metaKey;
+    if (c && e.shiftKey && e.altKey && e.code === "KeyR") return "recorder";
     if (c && e.shiftKey && k === "a") return "tabList";
     if (c && e.shiftKey && k === "m") return "pm";
     if (c && e.shiftKey && k === "s") return "settings";
@@ -909,6 +952,8 @@ function mountChrome(opts) {
     if (e.altKey && e.key === "ArrowLeft") return "back";
     if (e.altKey && e.key === "ArrowRight") return "fwd";
     if (e.key === "F11" && !document.body.classList.contains("mac")) return "fullscreen";
+    if (document.body.classList.contains("mac") && e.ctrlKey && e.metaKey && k === "f") return "fullscreen";
+    if (e.key === "Escape" && !c && document.body.classList.contains("full") && !document.querySelector(".scrim, .save, .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden])")) return "fullscreen";
     return null;
   }
   document.addEventListener("keydown", (e) => {
@@ -1223,7 +1268,7 @@ function mountChrome(opts) {
     setCover("qr", qrClosing > 0 || [...qrCards.values()].some((c) => !c.el.hidden));
   }
   function syncCardTabs(w) {
-    for (const c of qrCards.values()) c.el.hidden = c.yielded || c.tab !== null && c.tab !== w.cur;
+    for (const c of qrCards.values()) c.el.hidden = c.yielded || c.webOpen || c.tab !== null && c.tab !== w.cur;
     qrCoverSync();
     if (saveEl) {
       saveEl.hidden = saveTab !== null && saveTab !== w.cur;
@@ -1340,7 +1385,12 @@ function mountChrome(opts) {
           if (!live() || img.dataset.src !== m.qr) return;
           img.hidden = false;
           requestAnimationFrame(() => requestAnimationFrame(() => {
-            if (live() && img.dataset.src === m.qr) qrbox.classList.add("has-qr");
+            if (live() && img.dataset.src === m.qr) {
+              qrbox.classList.add("has-qr");
+              card.qrShown = (card.qrShown || 0) + 1;
+              const wb = q(el, ".wl");
+              if (!wb.hidden && card.qrShown > 1) armWeb(wb);
+            }
           }));
         };
         img.src = u;
@@ -1368,7 +1418,20 @@ function mountChrome(opts) {
         mark.innerHTML = markHtml;
       }
     });
-    const footText = sm.foot;
+    const inTile = TILE_STAGES.has(m.stage);
+    const ovt = q(el, ".ovt");
+    const ovtText = inTile && m.stage !== "error" ? sm.foot : "";
+    if (ovt.textContent !== ovtText) ovt.textContent = ovtText;
+    const why = q(el, ".rb span");
+    const whyText = m.stage === "error" ? sm.foot || qrCopy.RETRY_ACTION : qrCopy.RETRY_ACTION;
+    if (why.textContent !== whyText) why.textContent = whyText;
+    const footText = inTile ? "" : sm.foot;
+    const wl = q(el, ".wl");
+    const showWeb = Boolean(card.web) && WEB_LOGIN_PROVIDERS.has(m.provider) && WEB_FALLBACK_STAGES.has(m.stage);
+    if (wl.hidden === showWeb) {
+      wl.hidden = !showWeb;
+      if (showWeb) armWeb(wl);
+    }
     const foot = q(el, ".qst");
     if (foot.textContent !== footText) {
       foot.getAnimations().forEach((a) => a.cancel());
@@ -1377,7 +1440,83 @@ function mountChrome(opts) {
     }
     q(el, ".dlg").dataset.stage = m.stage;
   }
-  function qrPrompt(m, onCancel, onRetry, tabId) {
+  const WEB_LOGIN_PROVIDERS = /* @__PURE__ */ new Set(["Steam 扫码登录", "OPPO 扫码登录", "VIVO 扫码登录", "小米扫码登录", "WeGame - QQ", "华为扫码登录", "荣耀扫码登录"]);
+  const WEB_FALLBACK_STAGES = /* @__PURE__ */ new Set(["loading", "retrying", "scan", "error"]);
+  const TILE_STAGES = /* @__PURE__ */ new Set(["loading", "retrying", "error"]);
+  const WEB_ARM_MS = 500;
+  function armWeb(b) {
+    clearTimeout(b._arm);
+    b.classList.add("arming");
+    b._arm = setTimeout(() => b.classList.remove("arming"), WEB_ARM_MS);
+  }
+  let webSheetEl = null;
+  let webSheetOff = null;
+  function webSheet(tabId, opts2, onRect, onClose) {
+    const card = qrCards.get(tabId);
+    if (!opts2) {
+      webSheetOff?.();
+      webSheetOff = null;
+      const el2 = webSheetEl;
+      webSheetEl = null;
+      if (el2) {
+        el2.classList.remove("in");
+        setTimeout(() => el2.remove(), 160);
+      }
+      if (card) {
+        card.webOpen = false;
+        syncCardTabs(winOfTab(tabId));
+      }
+      setCover("web", false);
+      return;
+    }
+    const vp = document.querySelector(".win #viewport");
+    if (!vp) return;
+    webSheetEl?.remove();
+    webSheetOff?.();
+    const el = document.createElement("div");
+    el.className = "ws-scrim";
+    el.innerHTML = `<div class="ws" role="dialog"><div class="hd"><img class="bi" alt="" hidden><span class="t"></span><span class="src">官方网页</span><span class="wsx" data-tip="关闭" data-key="Esc">${S.close}</span></div><div class="page"></div></div>`;
+    q(el, ".t").textContent = opts2.title;
+    if (opts2.width && opts2.width !== 440) q(el, ".ws").style.width = `${opts2.width + 6}px`;
+    const icon = BRAND_ICON[opts2.provider || ""];
+    const bi = q(el, ".bi");
+    if (icon) {
+      bi.src = icon;
+      bi.hidden = false;
+    }
+    q(el, ".wsx").onclick = (e) => {
+      e.stopPropagation();
+      onClose?.();
+    };
+    vp.append(el);
+    webSheetEl = el;
+    if (card) {
+      card.webOpen = true;
+      syncCardTabs(winOfTab(tabId));
+    }
+    setCover("web", true);
+    const report = () => {
+      const r = q(el, ".page").getBoundingClientRect();
+      if (r.height > 80) onRect?.({ x: r.left + 1, y: r.top + 1, w: r.width - 2, h: r.height - 2 });
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose?.();
+      }
+    };
+    window.addEventListener("resize", report);
+    document.addEventListener("keydown", onKey);
+    webSheetOff = () => {
+      window.removeEventListener("resize", report);
+      document.removeEventListener("keydown", onKey);
+    };
+    requestAnimationFrame(() => {
+      el.classList.add("in");
+      report();
+    });
+  }
+  function qrPrompt(m, onCancel, onRetry, tabId, onWeb) {
     const vp = document.querySelector(".win #viewport");
     const key = tabId ?? null;
     const old = qrCards.get(key);
@@ -1387,8 +1526,12 @@ function mountChrome(opts) {
     }
     const scrim = document.createElement("div");
     scrim.className = "scrim center qr-scrim";
-    scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i></div><div class="retry"><button class="rb" type="button">${S.refresh || S.update || ""}<span></span></button></div></div></div>`;
-    const card = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false };
+    scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><button class="tb wl" type="button" hidden>${S.arrowUpRight}<span>使用网页登录</span></button><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i><span class="ovt"></span></div><div class="retry"><button class="rb" type="button" aria-label="${qrCopy.RETRY_ACTION}">${S.refresh || S.update || ""}<span></span></button></div></div></div>`;
+    const card = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false, web: onWeb || null, webOpen: false };
+    q(scrim, ".wl").onclick = (e) => {
+      e.stopPropagation();
+      card.web?.();
+    };
     const cancel = () => {
       const cb = card.cancel;
       closeQr(tabId);
@@ -1841,6 +1984,7 @@ function mountChrome(opts) {
     }
     anchor.classList.add("open");
     const r = anchor.getBoundingClientRect(), wr = el.getBoundingClientRect();
+    cancelLeave(m);
     m.hidden = false;
     m.style.left = r.right - 7 - wr.left - m.offsetWidth + "px";
     m.style.top = r.bottom - wr.top + 6 + "px";
@@ -1976,6 +2120,6 @@ function mountChrome(opts) {
     openTab(w, makeTab({ entry: info.entry, provider: info.provider || null, nick: info.nick || "", muted: Boolean(info.muted), born: true }), idx, { slot: info.slot, adopt: true });
     render(w);
   }
-  return { wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
+  return { webSheet, wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
 }
 module.exports = mountChrome;

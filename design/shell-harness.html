@@ -147,6 +147,9 @@
     /* 菜单家族入场：从锚点下方 4px 淡入（100ms 透明度、140ms 位移，先快后慢），关闭即刻消失（Chrome／macOS 同款）。对话框和保存卡已有入场，菜单没有就显得「弹」出来 */
     .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden]) { animation: menuFade .1s ease-out, menuSlide .14s cubic-bezier(0,0,.2,1); } /* 用 animation 不用 transition：transition 让元素常驻合成层，定稿态文字抗锯齿会变 */
     @keyframes menuFade { from { opacity: 0; } to { opacity: 1; } } @keyframes menuSlide { from { transform: translateY(-4px); } to { transform: none; } }
+    /* 收起＝入场反着播（作者 10-21）：淡出＋上收 4px，0.1 秒，播完由引擎藏掉；收起途中不接点击 */
+    .menu.leaving:not([hidden]), .amenu.leaving:not([hidden]), .tlmenu.leaving:not([hidden]) { animation: menuFadeOut .1s ease-in forwards, menuSlideOut .1s ease-in forwards; pointer-events: none; }
+    @keyframes menuFadeOut { from { opacity: 1; } to { opacity: 0; } } @keyframes menuSlideOut { from { transform: none; } to { transform: translateY(-4px); } }
     .menu .item { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 10px; border-radius: 4px; }
     .menu .item:hover { background: rgba(0,0,0,.05); }
     /* 宽度是档位不是量体裁衣：图标＋动宾短语、右侧无内容的菜单取 160——文字列（40 起、4 字到 92）之后留一个与左列等宽的呼吸列；208 是右键菜单档（长短语），112 则让 hover 药丸贴着字 */
@@ -304,6 +307,26 @@
     #viewport .dlg.qr .steps li.cur { color: #1b1b1f; } #viewport .dlg.qr .steps li.cur i { background: #1b1b1f; color: #fff; box-shadow: none; } /* 状态只用颜色和标记表达，不改字重：字重一变字宽就变，整列会抖 */
     #viewport .dlg.qr .steps li.done { color: #5c5c63; } #viewport .dlg.qr .steps li.done i { background: #1b1b1f; color: #fff; box-shadow: none; }
     #viewport .dlg.qr .steps li.busy { color: #1b1b1f; } #viewport .dlg.qr .steps li.busy i { box-shadow: none; border: 2px solid rgba(0,0,0,.1); border-top-color: #1b1b1f; box-sizing: border-box; animation: qrspin .9s linear infinite; }
+    /* 「使用网页登录」：左下角浅灰按钮（作者 10-21 定乙），兜底常在，样式同对话框次按钮；换码时随新码重新淡入 */
+    /* 量过（作者 10-21）：步骤圆圈 18 宽、中心 x=9，步骤文字起于 x=28、13px。按钮左缘外探 7：箭头（12 宽）落在 3–15、中心 9；文字起于 28 */
+    #viewport .dlg.qr .wl { position: absolute; z-index: 1; left: -7px; bottom: 0; display: inline-flex; align-items: center; gap: 13px; padding: 0 12px 0 10px; font-size: 13px; -webkit-tap-highlight-color: transparent; outline: none; }
+    #viewport .dlg.qr .wl[hidden] { display: none; } #viewport .dlg.qr .wl svg { width: 12px; height: 12px; flex: none; }
+    #viewport .dlg.qr .wl { transition: opacity .3s ease, background-color .12s ease; } #viewport .dlg.qr .wl.arming { opacity: 0; pointer-events: none; } /* 稍等再淡入 */
+    /* 码那块里的提示：转圈下面写获取中／重试中；出错时白块上方写原因 */
+    #viewport .dlg.qr .ov .ovt { grid-area: auto; position: absolute; left: 0; right: 0; top: calc(50% + 26px); text-align: center; font-size: 12px; line-height: 18px; color: #5c5c63; white-space: nowrap; }
+    #viewport .dlg.qr[data-stage="loading"] .ov .ovt, #viewport .dlg.qr[data-stage="retrying"] .ov .ovt { opacity: 1; }
+
+    /* 网页登录浮层：外框照外壳——32 高灰条、三边 3px、页面区 1px 边线＋圆角 6；关闭键同标题栏右上角 */
+    #viewport .ws-scrim { position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .15s ease; }
+    #viewport .ws-scrim.in { opacity: 1; }
+    #viewport .ws { width: 446px; padding: 0 3px 3px; box-sizing: border-box; background: #f3f3f3; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.08); }
+    #viewport .ws .hd { height: 32px; display: flex; align-items: center; gap: 8px; padding-left: 9px; font-size: 12px; color: #1b1b1f; }
+    #viewport .ws .hd .bi { width: 16px; height: 16px; border-radius: 3px; flex: none; } #viewport .ws .hd .bi[hidden] { display: none; }
+    #viewport .ws .hd .src { color: #8e8e95; }
+    #viewport .ws .wsx { margin-left: auto; width: 36px; height: 32px; display: grid; place-items: center; color: var(--ink-2); position: relative; z-index: 0; }
+    #viewport .ws .wsx::before { content: ""; position: absolute; left: 3px; right: 3px; top: 4px; bottom: 4px; border-radius: 4px; z-index: -1; }
+    #viewport .ws .wsx:hover::before { background: rgba(0,0,0,.06); } #viewport .ws .wsx:active::before { background: rgba(0,0,0,.12); } #viewport .ws .wsx svg { width: 16px; height: 16px; }
+    #viewport .ws .page { height: min(600px, calc(100vh - 32px - 32px - 3px - 64px)); border: 1px solid #e3e3e5; border-radius: 6px; background: #fff; }
     #viewport .dlg.qr .qst { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 18px; color: #5c5c63; } /* 永远一行（作者 10-21）：文案按 qr-copy.ts 的宽度预算写，不换行也不截断 */
     #viewport .dlg.qr[data-stage="exchanging"] .qst { color: #1a7f37; }
     /* 更新页状态块 */
@@ -346,6 +369,7 @@
     #viewport .save .row .fld .ib.s { position: absolute; right: 2px; top: 2px; width: 24px; height: 24px; border-radius: 4px; color: #5c5c63; } #viewport .save .row .fld .ib.s.hv { color: #1b1b1f; background: rgba(0,0,0,.06); } #viewport .save .row .fld .ib.s svg { width: 14px; height: 14px; }
     #viewport .dlg .dchk[hidden] { display: none; } #viewport .dlg .dchk { display: flex; align-items: center; gap: 8px; margin-top: 12px; height: 20px; color: #5c5c63; font-size: 13px; cursor: pointer; user-select: none; } #viewport .dlg .dchk input { appearance: none; -webkit-appearance: none; margin: 0; width: 16px; height: 16px; border: 1px solid #c8c8cc; border-radius: 4px; background: #fff; position: relative; cursor: pointer; outline: none; transition: background-color .12s ease, border-color .12s ease; } #viewport .dlg .dchk input.hv { border-color: #8e8e95; } #viewport .dlg .dchk input:checked { background: #1b1b1f; border-color: #1b1b1f; } #viewport .dlg .dchk input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 5px; height: 9px; border-right: 1.8px solid #fff; border-bottom: 1.8px solid #fff; transform: rotate(45deg); } #viewport .dlg .dchk input:focus-visible { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #1b1b1f; } /* 系统复选框的橙色焦点环与尺寸都不属于这套皮，自绘；勾中用墨色，不开第二处彩色 */
     #viewport .dlg.qr .retry .rb.hv { color: #1b1b1f; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+    #viewport .ws .wsx.hv::before { background: rgba(0,0,0,.06); } #viewport .ws .wsx:active::before { background: rgba(0,0,0,.12); } #viewport .ws .wsx svg { width: 16px; height: 16px; }
     .pg .ulist { margin-top: 8px; } .pg .ustat.ready .uicon, .pg .ustat.available .uicon, .pg .ustat.downloading .uicon { color: #1a7f37; } .pg .ustat.downloading .bar i { background: #1a7f37; } .pg .tb.primary.ok { background: #1a7f37; border-color: #1a7f37; } .pg .tb.primary.ok.hv { background: #156a2e; border-color: #156a2e; } .pg .ustat { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid #e1e1e3; } .pg .ustat:last-child { border-bottom: 0; } .pg .ustat .uicon { width: 36px; height: 36px; color: #0067c0; } .pg .ustat .uicon svg { width: 36px; height: 36px; stroke-width: 1.4; }
     .pm .toast a { color: #8ab4f8; cursor: pointer; padding: 0 12px; height: 36px; display: inline-flex; align-items: center; border-radius: 18px; } .pm .toast a.hv { background: rgba(255,255,255,.08); }</style></head><body class="page">
 <div class="hbar"><button data-mode="live" class="on">实际操作面板</button><button data-mode="demo">demo 面板预览</button></div>
@@ -432,7 +456,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
         if (/^ERR_|NETWORK/.test(code)) return REASON.NETWORK_ERROR;
         if (/^HTTP_5\d\d$/.test(code)) return "平台服务器繁忙";
         if (/^HTTP_4\d\d$|_REJECTED|^STEAM_RESULT_|^OPPO_QR_STATUS_/.test(code)) return "平台拒绝了本次登录";
-        if (BROKEN.test(code)) return "登录方式暂时不可用";
+        if (BROKEN.test(code)) return "该方式暂时不可用";
         return "登录未完成";
       }
       function textWidth(text) {
@@ -450,9 +474,9 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
         if (m.stage === "scan") return { steps, state: ["cur", "wait", "wait"], foot: "" };
         if (m.stage === "confirm") return { steps, state: ["done", "cur", "wait"], foot: oppo ? "请在手机上确认登录" : "" };
         if (m.stage === "verify") return { steps, state: ["done", "done", "busy"], foot: "正在风控校验中" };
-        if (m.stage === "exchanging") return { steps, state: ["done", "done", "busy"], foot: "已收到扫码结果，账号校验中" };
+        if (m.stage === "exchanging") return { steps, state: ["done", "done", "busy"], foot: "已收到授权结果，账号校验中" };
         if (m.stage === "entering") return { steps, state: ["done", "done", "busy"], foot: "正在登录游戏" };
-        if (m.stage === "error") return { steps, state: ["cur", "wait", "wait"], foot: reason(m.code) };
+        if (m.stage === "error") return { steps, state: ["cur", "wait", "wait"], foot: m.provider === "Steam 扫码登录" && /^(?:NETWORK_ERROR|REQUEST_TIMEOUT)$|^ERR_|NETWORK/.test(m.code || "") ? "无法连接 Steam" : reason(m.code) };
         return { steps, state: ["wait", "wait", "wait"], foot: "" };
       }
       module.exports = { qrSteps, reason, textWidth, QR_APP, REASON, FOOT_EM, STEP_EM, RETRY_ACTION };
@@ -12175,7 +12199,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
       var qrcodegen = require_qrcode();
       function mountChrome2(opts) {
         const { S, ICON: ICON2, SPEC: SPEC2, host } = opts;
-        const ENTRIES = ["官服", "4399", "QQ 大厅", "7K7K", "百度", "360"];
+        const ENTRIES = ["官服", "4399", "QQ 大厅", "百度", "360"];
         const PROVIDERS = ["WeGame - QQ", "WeGame - 微信", "bilibili 扫码登录", "Steam 扫码登录", "OPPO 扫码登录", "小米扫码登录", "VIVO 扫码登录", "华为扫码登录", "荣耀扫码登录"];
         const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "bilibili", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀" };
         const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC2.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
@@ -12253,16 +12277,23 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           if (settings2.confirmClose && w.tabs.length >= 2) confirmCloseWindow(w.tabs.length, go);
           else go();
         }
+        const PASSIVE_COVER = /* @__PURE__ */ new Set(["tip", "toast", "leave", "web"]);
         const coverReasons = /* @__PURE__ */ new Set();
-        let coverSent = false;
+        let coverSent = false, keysSent = false, coverQueued = false;
         function setCover(reason, on) {
           if (on) coverReasons.add(reason);
           else coverReasons.delete(reason);
-          const full = coverReasons.size > 0;
-          if (full !== coverSent) {
-            coverSent = full;
-            host.cover?.(full);
-          }
+          if (coverQueued) return;
+          coverQueued = true;
+          queueMicrotask(() => {
+            coverQueued = false;
+            const full = coverReasons.size > 0, keys = [...coverReasons].some((r) => !PASSIVE_COVER.has(r));
+            if (full !== coverSent || keys !== keysSent) {
+              coverSent = full;
+              keysSent = keys;
+              host.cover?.(full, keys);
+            }
+          });
         }
         const chipWidthCache = {};
         let chipProbe = null;
@@ -12382,10 +12413,13 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
             q(el, ".more").onclick = (e) => {
               e.stopPropagation();
               const m = q(el, ".amenu");
-              const open = m.hidden;
+              const open = m.hidden || leaving.has(m);
               closeAll();
-              m.hidden = !open;
-              setCover("menu", open);
+              if (open) {
+                cancelLeave(m);
+                m.hidden = false;
+                setCover("menu", true);
+              }
             };
             q(el, ".amenu").onclick = (e) => {
               e.stopPropagation();
@@ -12736,11 +12770,36 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
             if (!s.moved && s.onClick) s.onClick();
           }
         };
+        const leaving = /* @__PURE__ */ new Map();
+        const MENU_SEL = ".menu,.amenu,.tlmenu";
+        function menusShowing() {
+          return [...document.querySelectorAll(MENU_SEL)].some((p) => !p.hidden && !leaving.has(p));
+        }
+        function cancelLeave(p) {
+          const t = leaving.get(p);
+          if (t === void 0) return;
+          clearTimeout(t);
+          leaving.delete(p);
+          p.classList.remove("leaving");
+          if (!leaving.size) setCover("leave", false);
+        }
+        function hideMenu(p) {
+          if (p.hidden || leaving.has(p)) return;
+          p.classList.add("leaving");
+          setCover("leave", true);
+          leaving.set(p, window.setTimeout(() => {
+            leaving.delete(p);
+            p.classList.remove("leaving");
+            p.hidden = true;
+            if (!leaving.size) setCover("leave", false);
+          }, 110));
+          if (!menusShowing()) setCover("menu", false);
+        }
         function closeAll() {
-          for (const p of document.querySelectorAll(".menu,.amenu,.tlmenu")) p.hidden = true;
+          for (const p of document.querySelectorAll(MENU_SEL)) hideMenu(p);
           for (const t of document.querySelectorAll(".tab.ctx")) t.classList.remove("ctx");
           document.querySelectorAll(".entry.open,.ib.s.op.open").forEach((x) => x.classList.remove("open"));
-          setCover("menu", false);
+          if (!menusShowing()) setCover("menu", false);
         }
         function menuItem(label, onClick, extra = {}) {
           const d = document.createElement("div");
@@ -12802,7 +12861,10 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
               }
             };
             m.append(other);
-            sub.hidden = !subOpen;
+            if (subOpen) {
+              cancelLeave(sub);
+              sub.hidden = false;
+            } else hideMenu(sub);
             const pickProvider = (p, logout) => {
               t.provider = p;
               t.entry = PROVIDER_CHIP[p];
@@ -12826,6 +12888,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
               sub.style.top = r.bottom - wr.top + 2 + other.offsetTop + "px";
             }
           };
+          cancelLeave(m);
           draw();
           m.hidden = false;
           m.style.left = r.left - wr.left - 8 + "px";
@@ -12910,6 +12973,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
               fn();
             }, { disabled }));
           }
+          cancelLeave(m);
           m.hidden = false;
           m.style.left = Math.min(x - wr.left, wr.width - 218) + "px";
           m.style.top = y - wr.top + "px";
@@ -12918,7 +12982,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
         function toggleTabList(w) {
           const el = winEl(w);
           const m = q(el, ".tlmenu");
-          const open = m && !m.hidden;
+          const open = m && !m.hidden && !leaving.has(m);
           closeAll();
           if (open) return;
           fillTabList(w);
@@ -12936,6 +13000,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
             m.hidden = true;
             return;
           }
+          cancelLeave(m);
           m.textContent = "";
           m.hidden = false;
           setCover("menu", true);
@@ -13054,6 +13119,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
             if (hasList(w)) toggleTabList(w);
           } else if (name === "menu") q(winEl(w), ".more").click();
           else if (name === "fullscreen") host.window?.command("fullscreen");
+          else if (name === "recorder") host.window?.command("recorder");
           else if (name === "pm" || name === "settings" || name === "update" || name === "about") {
             closeAll();
             openPage(w, name);
@@ -13066,6 +13132,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
         }
         function shortcutOf(e) {
           const k = e.key.toLowerCase(), c = e.ctrlKey || e.metaKey;
+          if (c && e.shiftKey && e.altKey && e.code === "KeyR") return "recorder";
           if (c && e.shiftKey && k === "a") return "tabList";
           if (c && e.shiftKey && k === "m") return "pm";
           if (c && e.shiftKey && k === "s") return "settings";
@@ -13078,6 +13145,8 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           if (e.altKey && e.key === "ArrowLeft") return "back";
           if (e.altKey && e.key === "ArrowRight") return "fwd";
           if (e.key === "F11" && !document.body.classList.contains("mac")) return "fullscreen";
+          if (document.body.classList.contains("mac") && e.ctrlKey && e.metaKey && k === "f") return "fullscreen";
+          if (e.key === "Escape" && !c && document.body.classList.contains("full") && !document.querySelector(".scrim, .save, .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden])")) return "fullscreen";
           return null;
         }
         document.addEventListener("keydown", (e) => {
@@ -13392,7 +13461,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           setCover("qr", qrClosing > 0 || [...qrCards.values()].some((c) => !c.el.hidden));
         }
         function syncCardTabs(w) {
-          for (const c of qrCards.values()) c.el.hidden = c.yielded || c.tab !== null && c.tab !== w.cur;
+          for (const c of qrCards.values()) c.el.hidden = c.yielded || c.webOpen || c.tab !== null && c.tab !== w.cur;
           qrCoverSync();
           if (saveEl) {
             saveEl.hidden = saveTab !== null && saveTab !== w.cur;
@@ -13509,7 +13578,12 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
                 if (!live() || img.dataset.src !== m.qr) return;
                 img.hidden = false;
                 requestAnimationFrame(() => requestAnimationFrame(() => {
-                  if (live() && img.dataset.src === m.qr) qrbox.classList.add("has-qr");
+                  if (live() && img.dataset.src === m.qr) {
+                    qrbox.classList.add("has-qr");
+                    card.qrShown = (card.qrShown || 0) + 1;
+                    const wb = q(el, ".wl");
+                    if (!wb.hidden && card.qrShown > 1) armWeb(wb);
+                  }
                 }));
               };
               img.src = u;
@@ -13537,7 +13611,20 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
               mark.innerHTML = markHtml;
             }
           });
-          const footText = sm.foot;
+          const inTile = TILE_STAGES.has(m.stage);
+          const ovt = q(el, ".ovt");
+          const ovtText = inTile && m.stage !== "error" ? sm.foot : "";
+          if (ovt.textContent !== ovtText) ovt.textContent = ovtText;
+          const why = q(el, ".rb span");
+          const whyText = m.stage === "error" ? sm.foot || qrCopy.RETRY_ACTION : qrCopy.RETRY_ACTION;
+          if (why.textContent !== whyText) why.textContent = whyText;
+          const footText = inTile ? "" : sm.foot;
+          const wl = q(el, ".wl");
+          const showWeb = Boolean(card.web) && WEB_LOGIN_PROVIDERS.has(m.provider) && WEB_FALLBACK_STAGES.has(m.stage);
+          if (wl.hidden === showWeb) {
+            wl.hidden = !showWeb;
+            if (showWeb) armWeb(wl);
+          }
           const foot = q(el, ".qst");
           if (foot.textContent !== footText) {
             foot.getAnimations().forEach((a) => a.cancel());
@@ -13546,7 +13633,83 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           }
           q(el, ".dlg").dataset.stage = m.stage;
         }
-        function qrPrompt(m, onCancel, onRetry, tabId) {
+        const WEB_LOGIN_PROVIDERS = /* @__PURE__ */ new Set(["Steam 扫码登录", "OPPO 扫码登录", "VIVO 扫码登录", "小米扫码登录", "WeGame - QQ", "华为扫码登录", "荣耀扫码登录"]);
+        const WEB_FALLBACK_STAGES = /* @__PURE__ */ new Set(["loading", "retrying", "scan", "error"]);
+        const TILE_STAGES = /* @__PURE__ */ new Set(["loading", "retrying", "error"]);
+        const WEB_ARM_MS = 500;
+        function armWeb(b) {
+          clearTimeout(b._arm);
+          b.classList.add("arming");
+          b._arm = setTimeout(() => b.classList.remove("arming"), WEB_ARM_MS);
+        }
+        let webSheetEl = null;
+        let webSheetOff = null;
+        function webSheet(tabId, opts2, onRect, onClose) {
+          const card = qrCards.get(tabId);
+          if (!opts2) {
+            webSheetOff?.();
+            webSheetOff = null;
+            const el2 = webSheetEl;
+            webSheetEl = null;
+            if (el2) {
+              el2.classList.remove("in");
+              setTimeout(() => el2.remove(), 160);
+            }
+            if (card) {
+              card.webOpen = false;
+              syncCardTabs(winOfTab(tabId));
+            }
+            setCover("web", false);
+            return;
+          }
+          const vp = document.querySelector(".win #viewport");
+          if (!vp) return;
+          webSheetEl?.remove();
+          webSheetOff?.();
+          const el = document.createElement("div");
+          el.className = "ws-scrim";
+          el.innerHTML = `<div class="ws" role="dialog"><div class="hd"><img class="bi" alt="" hidden><span class="t"></span><span class="src">官方网页</span><span class="wsx" data-tip="关闭" data-key="Esc">${S.close}</span></div><div class="page"></div></div>`;
+          q(el, ".t").textContent = opts2.title;
+          if (opts2.width && opts2.width !== 440) q(el, ".ws").style.width = `${opts2.width + 6}px`;
+          const icon = BRAND_ICON[opts2.provider || ""];
+          const bi = q(el, ".bi");
+          if (icon) {
+            bi.src = icon;
+            bi.hidden = false;
+          }
+          q(el, ".wsx").onclick = (e) => {
+            e.stopPropagation();
+            onClose?.();
+          };
+          vp.append(el);
+          webSheetEl = el;
+          if (card) {
+            card.webOpen = true;
+            syncCardTabs(winOfTab(tabId));
+          }
+          setCover("web", true);
+          const report = () => {
+            const r = q(el, ".page").getBoundingClientRect();
+            if (r.height > 80) onRect?.({ x: r.left + 1, y: r.top + 1, w: r.width - 2, h: r.height - 2 });
+          };
+          const onKey = (e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              onClose?.();
+            }
+          };
+          window.addEventListener("resize", report);
+          document.addEventListener("keydown", onKey);
+          webSheetOff = () => {
+            window.removeEventListener("resize", report);
+            document.removeEventListener("keydown", onKey);
+          };
+          requestAnimationFrame(() => {
+            el.classList.add("in");
+            report();
+          });
+        }
+        function qrPrompt(m, onCancel, onRetry, tabId, onWeb) {
           const vp = document.querySelector(".win #viewport");
           const key = tabId ?? null;
           const old = qrCards.get(key);
@@ -13556,8 +13719,12 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           }
           const scrim = document.createElement("div");
           scrim.className = "scrim center qr-scrim";
-          scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i></div><div class="retry"><button class="rb" type="button">${S.refresh || S.update || ""}<span></span></button></div></div></div>`;
-          const card = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false };
+          scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><button class="tb wl" type="button" hidden>${S.arrowUpRight}<span>使用网页登录</span></button><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i><span class="ovt"></span></div><div class="retry"><button class="rb" type="button" aria-label="${qrCopy.RETRY_ACTION}">${S.refresh || S.update || ""}<span></span></button></div></div></div>`;
+          const card = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false, web: onWeb || null, webOpen: false };
+          q(scrim, ".wl").onclick = (e) => {
+            e.stopPropagation();
+            card.web?.();
+          };
           const cancel = () => {
             const cb = card.cancel;
             closeQr(tabId);
@@ -14010,6 +14177,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           }
           anchor.classList.add("open");
           const r = anchor.getBoundingClientRect(), wr = el.getBoundingClientRect();
+          cancelLeave(m);
           m.hidden = false;
           m.style.left = r.right - 7 - wr.left - m.offsetWidth + "px";
           m.style.top = r.bottom - wr.top + 6 + "px";
@@ -14145,7 +14313,7 @@ const ICON='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAA
           openTab(w, makeTab({ entry: info.entry, provider: info.provider || null, nick: info.nick || "", muted: Boolean(info.muted), born: true }), idx, { slot: info.slot, adopt: true });
           render(w);
         }
-        return { wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
+        return { webSheet, wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
       }
       module.exports = mountChrome2;
     }

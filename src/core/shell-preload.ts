@@ -31,7 +31,7 @@ window.addEventListener('DOMContentLoaded', () => {
       provider: (t, provider, opts) => send('jnd-chrome-tab', { type: 'provider', id: t.id, provider, logout: Boolean(opts?.logout) }),
     },
     window: { command: (cmd, reason) => send('jnd-chrome-window', cmd, reason), dragStart: at => send('jnd-chrome-window', { cmd: 'dragStart', ...at }), dragEnd: () => send('jnd-chrome-window', { cmd: 'dragEnd' }) },
-    cover: full => send('jnd-chrome-cover', full),
+    cover: (full, keys) => send('jnd-chrome-cover', full, keys),
     settings: { set: (key, value) => send('jnd-chrome-settings', { key, value }), logoutAll: () => call('jnd-chrome-logout-all') },
     accounts: {
       // 账号行的 uid 字段在壳里装的是入口 id（主进程给的），account 是定位记录用的旧值
@@ -64,7 +64,13 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!Number.isInteger(tabId)) return;
     if (m.action === 'close') { api.closeQr(tabId); return; }
     const model = { provider: String(m.provider || ''), stage: m.stage, qr: String(m.qr || ''), text: String(m.text || ''), code: String(m.code || ''), retry: Number(m.retry) || 0 };
-    if (m.action === 'open') api.qrPrompt(model, () => send('jnd-chrome-qr-cancel', { id: m.id }), () => send('jnd-chrome-qr-retry', { id: m.id }), tabId); else if (m.action === 'update') api.updateQr(model, tabId);
+    if (m.action === 'open') api.qrPrompt(model, () => send('jnd-chrome-qr-cancel', { id: m.id }), () => send('jnd-chrome-qr-retry', { id: m.id }), tabId, () => send('jnd-chrome-qr-web', { id: m.id })); else if (m.action === 'update') api.updateQr(model, tabId);
+  });
+  /* 网页登录浮层：开／关；页面区位置与关闭回宿主 */
+  ipcRenderer.on('jnd-chrome-websheet', (_e, m: any) => {
+    const tabId = Number(m?.id); if (!Number.isInteger(tabId)) return;
+    if (m.action === 'open') api.webSheet(tabId, { title: String(m.title || ''), provider: String(m.provider || ''), width: Number(m.width) || 440 }, r => send('jnd-chrome-websheet-rect', { id: tabId, ...r }), () => send('jnd-chrome-websheet-close', { id: tabId }));
+    else api.webSheet(tabId, null);
   });
   ipcRenderer.on('jnd-chrome-save-prompt', (_e, m: any) => api.savePrompt({ account: String(m.account || ''), password: String(m.password || ''), mode: m.mode === 'changed' ? 'changed' : 'new' }, r => send('jnd-chrome-save-result', { entryId: m.entryId, ...r }), m.id === undefined ? undefined : Number(m.id)));
   // 建窗：恢复的标签或一个默认标签；标签 id 由引擎分配，宿主按 open 消息建视图

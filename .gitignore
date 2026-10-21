@@ -2,3 +2,5 @@ node_modules/
 dist-series/
 *.log
 .DS_Store
+# 官服登录页本地副本：官方素材，不入公开仓库；构建前 node scripts/fetch-landing-seed.js 生成
+core/landing-seed/
