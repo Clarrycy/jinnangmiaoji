@@ -1,519 +1,89 @@
 // ==UserScript==
-// @name         统一登录器 · 多渠道直连
-// @namespace    jinnangdai.micro.unified-login
-// @version      1.1.1
-// @description  在三国杀官网按渠道接入本人账号；支持官方扫码、官方网页登录和账号管理直达。可选保存本机可恢复的官方登录状态，绝不保存密码或验证码。
-// @match        https://web.sanguosha.com/*
-// @match        https://joint.vivo.com.cn/game-subaccount-login/*
-// @match        https://passport.vivo.com.cn/*
-// @match        https://game-login.heytap.com/game-union-h5/h5/client-login/*
-// @match        http://game.xiaomi.com/oauthcallback/mioauth*
-// @match        https://game.xiaomi.com/oauthcallback/mioauth*
-// @match        https://10th-ly-login.sanguosha.com/steam/oauth/callback.html*
+// @name         统一登录器
+// @namespace    jinnangdai.wegame.standalone
+// @version      1.0.10
+// @match        https://web.sanguosha.com/login/index.html*
+// @match        https://web.sanguosha.com/10/pc/index.php*
+// @match        https://web.sanguosha.com/10/pc/bilibiliWD_index.php*
+// @match        https://web.sanguosha.com/login/x/index*
 // @run-at       document-start
-// @sandbox      raw
 // @noframes
-// @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
-// @grant        GM_listValues
-// @connect      account.xiaomi.com
-// @connect      sgp.account.xiaomi.com
-// @connect      sgp.lp.account.xiaomi.com
-// @connect      account.migc.g.mi.com
-// @connect      anysdk.dobest.cn
-// @connect      10th-sdk-login.sanguosha.com
-// @connect      10th-ly-login.sanguosha.com
-// @connect      m.wegame.com.cn
 // @connect      openmobile.qq.com
 // @connect      xui.ptlogin2.qq.com
 // @connect      ssl.ptlogin2.qq.com
 // @connect      ptlogin2.qq.com
 // @connect      graph.qq.com
-// @connect      imgcache.qq.com
 // @connect      open.weixin.qq.com
 // @connect      long.open.weixin.qq.com
+// @connect      imgcache.qq.com
+// @connect      m.wegame.com.cn
+// @connect      anysdk.dobest.cn
+// @connect      10th-sdk-login.sanguosha.com
+// @connect      web-login-api.sanguosha.com
+// @connect      wpg-api.biligame.com
+// @connect      10th-ly-login.sanguosha.com
+// @connect      api.steampowered.com
+// @connect      login.steampowered.com
+// @connect      steamcommunity.com
+// @connect      id-cn.heytap.com
+// @connect      id.heytap.com
+// @connect      client-uc.heytapmobi.com
+// @connect      isdk.heytapmobi.com
+// @connect      account.xiaomi.com
+// @connect      sgp.account.xiaomi.com
+// @connect      sgp.lp.account.xiaomi.com
+// @connect      account.migc.g.mi.com
 // @connect      passport.vivo.com.cn
 // @connect      joint.vivo.com.cn
 // @connect      oauth-login-drcn.platform.dbankcloud.com
 // @connect      oauth-login1.cloud.huawei.com
 // @connect      oauth-login.cloud.huawei.com
 // @connect      id1.cloud.huawei.com
-// @connect      id.cloud.huawei.com
 // @connect      hnoauth-login.cloud.hihonor.com
-// @connect      hnid-drcn.cloud.hihonor.com
 // @connect      hnid-drcn.platform.hihonorcloud.com
+// @connect      hnid-drcn.cloud.hihonor.com
+// @connect      hnid.cloud.hihonor.com
 // @connect      gamecenter-api-drcn.hispace.hihonorcloud.com
-// @connect      api.steampowered.com
-// @connect      login.steampowered.com
-// @connect      steamcommunity.com
-// @connect      store.steampowered.com
-// @connect      wpg-api.biligame.com
-// @connect      game.bilibili.com
-// @connect      passport.biligame.com
-// @connect      id-cn.heytap.com
-// @connect      id.heytap.com
-// @connect      client-uc.heytapmobi.com
-// @connect      isdk.heytapmobi.com
-// @connect      muc.heytap.com
-// @connect      captcha-sec.heytapmobi.com
-// @connect      game-login.heytap.com
-// @connect      web-login-api.sanguosha.com
-// @connect      wwwoss.sanguosha.com
+// ==/UserScript==
 
+/*
+ * QQ protocol: SGS WeGame Android 1.0.314, SHA-256
+ * bd4b385fb37ae2fa85191df755ad75a5e037a722f0ce74a4fc2f6672f8d3675b.
+ * Configuration below is application metadata shipped in that official client,
+ * not a user's password or session. No emulator, daemon, remote script or eval.
+ * Browser transport is GM XHR (not fetch): response cookies and finalUrl matter.
+ * OPPO channel: BSP risk signature runs from a vendored official copy
+ * (bspWwas.js, 2026-09-21); the DingXiang human-verification widget is loaded
+ * live from the official captcha domain only when the server demands it
+ * (author-approved exception, 2026-09-22 — a frozen fork would go stale).
+ * Remembered channel authorization uses this script's private GM storage, one
+ * account; token lifetime and renewal follow the official SDK response.
+ * Logout deletes it. QQ cookies are memory-only.
+ * Lifecycle audit log (unified.lifecycle.v1, bounded) records what was saved,
+ * restored, entered and forgotten, with timestamps; never token values.
+ * Each refresh validates it with the official services; game grants are one-use.
+ * The Python implementation completed real game login; this port needs its own
+ * Tampermonkey / Windows end-to-end validation, not just protocol unit tests.
+ */
 (() => {
   'use strict';
-  if (window.top !== window) return;
-  const VIVO_PENDING_NONCE_KEY = 'sgs-vivo-pending-nonce-v1';
-  const VIVO_PAGE_STATE_PREFIX = 'sgs-vivo-page-state-v1:';
-  const STEAM_PAGE_RESULT_PREFIX = 'sgs-steam-page-result-v1:';
-  const XIAOMI_PAGE_RESULT_PREFIX = 'sgs-xiaomi-page-result-v1:';
-  function vivoBridgeNonce() {
-    const fromName = /^sgs-vivo-([a-f0-9]{16,64})$/.exec(window.name || '');
-    if (fromName) return fromName[1];
-    try {
-      const saved = sessionStorage.getItem('sgs-vivo-bridge-nonce');
-      if (/^[a-f0-9]{16,64}$/.test(saved || '')) return saved;
-    } catch (_) {}
-    try {
-      const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''));
-      const value = hash.get('sgs_vivo');
-      if (/^[a-f0-9]{16,64}$/.test(value || '')) return value;
-    } catch (_) {}
-    try {
-      const pending = GM_getValue(VIVO_PENDING_NONCE_KEY, null);
-      if (pending && /^[a-f0-9]{16,64}$/.test(pending.nonce || '') && Number(pending.expires) > Date.now()) {
-        return pending.nonce;
-      }
-    } catch (_) {}
-    return '';
-  }
-  function vivoPageState(nonce, phase, extra = {}) {
-    if (!/^[a-f0-9]{16,64}$/.test(nonce || '')) return;
-    try {
-      GM_setValue(VIVO_PAGE_STATE_PREFIX + nonce, {v: 1, nonce, phase,
-        at: Date.now(), expires: Date.now() + 15 * 60 * 1000, ...extra});
-      console.info('[统一登录器]', {stage: 'vivo_page_bridge', phase});
-    } catch (_) {}
-  }
-  function clearVivoPending(nonce) {
-    try {
-      const pending = GM_getValue(VIVO_PENDING_NONCE_KEY, null);
-      if (!nonce || pending?.nonce === nonce) GM_deleteValue(VIVO_PENDING_NONCE_KEY);
-    } catch (_) {}
-  }
-  function vivoPassportBridge() {
-    const nonce = vivoBridgeNonce();
-    if (!nonce) return;
-    const path = location.pathname.startsWith('/') ? location.pathname.slice(0, 160) : '/';
-    vivoPageState(nonce, 'passport_loaded', {path, loginPage: true});
-  }
-  function vivoPageBridge() {
-    const resultPrefix = 'sgs-vivo-page-result-v1:';
-    const nonceKey = 'sgs-vivo-bridge-nonce';
-    const nonce = vivoBridgeNonce();
-    if (!nonce) return;
-    try { sessionStorage.setItem(nonceKey, nonce); } catch (_) {}
-    try {
-      document.cookie = 'vvc_pn=com.yoka.sgstenth.vivo; domain=.vivo.com.cn; path=/; secure; SameSite=None';
-    } catch (_) {}
-    const decode = value => {
-      try { return decodeURIComponent(String(value || '')); } catch (_) { return String(value || ''); }
-    };
-    // The official page writes the login cookies through js-cookie. Keep a
-    // transient in-page copy of those writes so a successful /h5/union/use is
-    // not missed when document.cookie is not immediately readable.
-    const memoryCookies = Object.create(null);
-    let cookieWriteAt = 0;
-    try {
-      let descriptor = Object.getOwnPropertyDescriptor(document, 'cookie');
-      for (let proto = Object.getPrototypeOf(document); !descriptor && proto; proto = Object.getPrototypeOf(proto)) {
-        descriptor = Object.getOwnPropertyDescriptor(proto, 'cookie');
-      }
-      if (descriptor?.get && descriptor?.set) {
-        Object.defineProperty(document, 'cookie', {
-          configurable: true,
-          enumerable: !!descriptor.enumerable,
-          get() { return descriptor.get.call(this); },
-          set(raw) {
-            try {
-              const first = String(raw || '').split(';')[0];
-              const index = first.indexOf('=');
-              if (index > 0) {
-                const name = first.slice(0, index).trim();
-                if (name === 'vvf_subopenid' || name === 'vvf_opentoken' || name === 'vvf_openid') {
-                  memoryCookies[name] = decode(first.slice(index + 1).trim());
-                  cookieWriteAt = Date.now();
-                }
-              }
-            } catch (_) {}
-            return descriptor.set.call(this, raw);
-          }
-        });
-      }
-    } catch (_) {}
-    const cookies = () => {
-      const out = Object.create(null);
-      let raw = '';
-      try { raw = String(document.cookie || ''); } catch (_) {}
-      for (const part of raw.split(';')) {
-        const index = part.indexOf('=');
-        if (index < 0) continue;
-        const name = part.slice(0, index).trim();
-        if (!/^[A-Za-z0-9_]+$/.test(name)) continue;
-        out[name] = decode(part.slice(index + 1).trim());
-      }
-      for (const name of ['vvf_subopenid', 'vvf_opentoken', 'vvf_openid']) {
-        if (!out[name] && memoryCookies[name]) out[name] = memoryCookies[name];
-      }
-      return out;
-    };
-    let sent = false, lastPhase = '', lastStateAt = 0;
-    let freshLogin = false, freshAt = 0, homeSeenAt = 0;
-    const officialPath = path => path === '/game-subaccount-login' || path.startsWith('/game-subaccount-login/');
-    const readyRoute = () => /#\/(?:home|hold)(?:[?/]|$)/.test(location.hash) ||
-      /(?:^|[?&])from=auth(?:&|$)/.test(location.search);
-    const homeVisible = () => {
-      try {
-        const home = document.querySelector('#home');
-        const shown = home && !home.hidden && (!home.getClientRects || home.getClientRects().length > 0);
-        return !!shown || /切换帐号/.test(String(document.body?.innerText || ''));
-      } catch (_) { return false; }
-    };
-    const initialCookies = cookies();
-    const initialPair = String(initialCookies.vvf_subopenid || '') + '\n' + String(initialCookies.vvf_opentoken || '');
-    const writeState = (phase, extra = {}, force = false) => {
-      const now = Date.now();
-      if (!force && phase === lastPhase && now - lastStateAt < 2500) return;
-      lastPhase = phase; lastStateAt = now;
-      vivoPageState(nonce, phase, extra);
-    };
-    writeState('bridge_loaded', {route: readyRoute() ? 'auth' : 'login',
-      hasSubOpenId: !!initialCookies.vvf_subopenid, hasOpenToken: !!initialCookies.vvf_opentoken}, true);
-    const capture = (href, authoritative = false, reason = '') => {
-      if (sent) return;
-      let url;
-      try { url = new URL(String(href)); } catch (_) { return; }
-      if (url.protocol !== 'https:' || url.hostname !== 'joint.vivo.com.cn' ||
-        !officialPath(url.pathname)) return;
-      const c = cookies();
-      const pair = String(c.vvf_subopenid || '') + '\n' + String(c.vvf_opentoken || '');
-      const routeReady = readyRoute(), cookiesChanged = pair !== initialPair;
-      const cookieWritten = !!(freshAt && cookieWriteAt >= freshAt - 1000);
-      if (!authoritative && !routeReady && !cookiesChanged &&
-        !(freshLogin && (cookieWritten || homeVisible()))) return;
-      const subOpenId = String(c.vvf_subopenid || '');
-      const openToken = String(c.vvf_opentoken || '');
-      if (!/^[A-Za-z0-9+/=_.~-]{1,2048}$/.test(subOpenId) ||
-        !/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(openToken)) {
-        if (authoritative || routeReady || cookiesChanged || freshLogin) {
-          writeState('cookies_missing', {hasSubOpenId: !!subOpenId, hasOpenToken: !!openToken});
-        }
-        return;
-      }
-      const openId = /^[A-Za-z0-9+/=_.~-]{1,1024}$/.test(String(c.vvf_openid || '')) ? String(c.vvf_openid) : '';
-      sent = true;
-      const resultKey = resultPrefix + nonce;
-      try {
-        GM_setValue(resultKey, {v: 1, nonce, subOpenId, openToken, openId,
-          href: url.href.slice(0, 2048), createdAt: Date.now(), expires: Date.now() + 120000});
-        clearVivoPending(nonce);
-        writeState('result_sent', {route: authoritative ? 'official' :
-          reason || (freshLogin ? 'union_use' : routeReady ? 'auth' : 'cookie_change'),
-          hasOpenId: !!openId}, true);
-        setTimeout(() => {
-          try {
-            const current = GM_getValue(resultKey, null);
-            if (current?.nonce === nonce) GM_deleteValue(resultKey);
-          } catch (_) {}
-        }, 130000);
-        setTimeout(() => { try { window.close(); } catch (_) {} }, 300);
-      } catch (_) { sent = false; }
-    };
-    const markFresh = reason => {
-      freshLogin = true; freshAt = Date.now();
-      for (const delay of [150, 600, 1600, 3200]) {
-        setTimeout(() => { try { capture(location.href, false, reason); } catch (_) {} }, delay);
-      }
-    };
-    const responseObject = raw => {
-      if (raw == null || raw === '') return null;
-      if (typeof raw === 'object') return raw;
-      try { return JSON.parse(String(raw)); } catch (_) {}
-      try {
-        const decoded = window.MaodunCipher?.decrypt?.(String(raw));
-        if (decoded?.code === 0 && typeof decoded.data === 'string') return JSON.parse(decoded.data);
-      } catch (_) {}
-      return null;
-    };
-    const maybeFresh = (raw, status, reason) => {
-      if (!(status >= 200 && status < 300)) return;
-      const value = responseObject(raw);
-      // A 2xx /h5/union/use is the official successful hand-off. If the
-      // response is encrypted by an updated SDK, cookie presence and the home
-      // view are still required before capture sends anything.
-      if (!value || Number(value.code) === 0) markFresh(reason);
-    };
-    // Adult accounts do not call AppWebClient.onVivoAccountLogin after
-    // /h5/union/use. Observe the official request itself so the successful
-    // hand-off cannot be missed when the Vue route stays at '#/'.
-    try {
-      const isUnionUse = raw => {
-        try {
-          const url = new URL(String(raw), location.href);
-          return url.protocol === 'https:' && url.hostname === 'joint.vivo.com.cn' && url.pathname === '/h5/union/use';
-        } catch (_) { return false; }
-      };
-      const xhrOpen = XMLHttpRequest.prototype.open;
-      const xhrSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-        try {
-          this.__sgsVivoUnionUse = String(method || '').toLowerCase() === 'post' && isUnionUse(url);
-          this.__sgsVivoUnionURL = String(url || '');
-        } catch (_) {}
-        return xhrOpen.call(this, method, url, ...rest);
-      };
-      XMLHttpRequest.prototype.send = function (...args) {
-        if (this.__sgsVivoUnionUse) {
-          this.addEventListener('load', () => {
-            try {
-              const finalURL = this.responseURL || this.__sgsVivoUnionURL;
-              if (!isUnionUse(finalURL)) return;
-              const raw = this.responseType === 'json' ? this.response : this.responseText;
-              maybeFresh(raw, this.status, 'union_use');
-            } catch (_) {}
-          }, {once: true});
-        }
-        return xhrSend.apply(this, args);
-      };
-      if (typeof window.fetch === 'function') {
-        const previousFetch = window.fetch;
-        window.fetch = function (input, init) {
-          const url = typeof input === 'string' ? input : input?.url;
-          const request = previousFetch.call(this, input, init);
-          if (isUnionUse(url)) {
-            request.then(response => {
-              if (!response.ok || typeof response.clone !== 'function') return;
-              response.clone().text().then(raw => maybeFresh(raw, response.status, 'fetch_union_use'))
-                .catch(() => {});
-            }).catch(() => {});
-          }
-          return request;
-        };
-      }
-    } catch (_) {}
-    const client = {
-      onVivoAccountLogin(href) {
-        writeState('official_login_called', {route: 'official'} , true);
-        freshLogin = true; freshAt = Date.now();
-        capture(href, true, 'official');
-        return true;
-      },
-      doAntiAddiction() { return true; },
-      onVivoAccountLogout() {},
-      addAccountSecretParam() {},
-      clearHistory() {},
-      getAscribeParams() { return '{}'; }
-    };
-    try {
-      Object.defineProperty(window, 'AppWebClient', {configurable: true, get: () => client, set: () => {}});
-    } catch (_) {
-      try { window.AppWebClient = client; } catch (_) {}
-    }
-    capture(location.href);
-    const timer = setInterval(() => { try { capture(location.href); } catch (_) {} }, 500);
-    const stateTimer = setInterval(() => {
-      if (sent) return;
-      const c = cookies();
-      const hasSubOpenId = !!c.vvf_subopenid, hasOpenToken = !!c.vvf_opentoken;
-      if (hasSubOpenId && hasOpenToken && homeVisible()) {
-        if (!homeSeenAt) homeSeenAt = Date.now();
-        if (!freshLogin && Date.now() - homeSeenAt >= 6000) markFresh('home_ready');
-      } else homeSeenAt = 0;
-      writeState(hasSubOpenId && hasOpenToken ? 'waiting_official_login'
-        : readyRoute() ? 'cookies_missing' : 'waiting_auth_cookie',
-        {hasSubOpenId, hasOpenToken});
-    }, 3000);
-    setTimeout(() => { clearInterval(timer); clearInterval(stateTimer); }, 12 * 60 * 1000);
-  }
-  function oppoPageBridge() {
-    const resultPrefix = 'sgs-oppo-page-result-v1:';
-    const nonceKey = 'sgs-oppo-bridge-nonce';
-    const readNonce = () => {
-      const fromName = /^sgs-oppo-([a-f0-9]{16,64})$/.exec(window.name || '');
-      if (fromName) return fromName[1];
-      try {
-        const saved = sessionStorage.getItem(nonceKey);
-        if (/^[a-f0-9]{16,64}$/.test(saved || '')) return saved;
-      } catch (_) {}
-      try {
-        const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''));
-        const value = hash.get('sgs_oppo');
-        if (/^[a-f0-9]{16,64}$/.test(value || '')) return value;
-      } catch (_) {}
-      return '';
-    };
-    const nonce = readNonce();
-    if (!nonce) return;
-    try { sessionStorage.setItem(nonceKey, nonce); } catch (_) {}
-    let sent = false;
-    const capture = href => {
-      if (sent) return;
-      let url;
-      try { url = new URL(String(href)); } catch (_) { return; }
-      if (url.protocol !== 'https:' || url.hostname !== 'game-login.heytap.com' ||
-        !url.pathname.startsWith('/game-union-h5/h5/client-login/')) return;
-      const params = new URLSearchParams(url.search);
-      if (url.hash) {
-        const hash = url.hash.replace(/^#/, '');
-        const query = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : hash;
-        try { for (const [key, value] of new URLSearchParams(query)) if (!params.has(key)) params.set(key, value); } catch (_) {}
-      }
-      const code = String(params.get('code') || '');
-      const ticket = String(params.get('ticket') || '');
-      if (!/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(code) &&
-        !/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(ticket)) return;
-      sent = true;
-      const resultKey = resultPrefix + nonce;
-      try {
-        GM_setValue(resultKey, {v: 1, nonce, code, ticket,
-          href: url.href.slice(0, 2048), createdAt: Date.now(), expires: Date.now() + 120000});
-        setTimeout(() => {
-          try {
-            const current = GM_getValue(resultKey, null);
-            if (current?.nonce === nonce) GM_deleteValue(resultKey);
-          } catch (_) {}
-        }, 130000);
-      } catch (_) { sent = false; }
-    };
-    capture(location.href);
-    const timer = setInterval(() => { try { capture(location.href); } catch (_) {} }, 500);
-    setTimeout(() => clearInterval(timer), 12 * 60 * 1000);
-  }
-  function steamCallbackBridge() {
-    const params = new URLSearchParams(location.search);
-    const hash = (location.hash || '').replace(/^#/, '').replace(/^\?/, '');
-    if (hash) {
-      const seen = new Set(params.keys());
-      for (const [key, value] of new URLSearchParams(hash)) if (!seen.has(key)) params.set(key, value);
-    }
-    const state = String(params.get('state') || '');
-    // Steam may replace window.name while crossing its OAuth/community pages.
-    // The state is already bound to this attempt and is an equally strong
-    // correlation key; use it when the popup name was lost.
-    const nonce = /^sgs-steam-([a-f0-9]{16,64})$/.exec(window.name || '')?.[1] ||
-      (/^[a-f0-9]{32}$/.test(state) ? state : '');
-    if (!nonce) return;
-    const accessToken = String(params.get('access_token') || '');
-    const steamid = String(params.get('steamid') || '');
-    const expiresIn = Number(params.get('expires_in')) || 0;
-    if (!/^[a-f0-9]{32}$/.test(state) || !/^[A-Za-z0-9._~+/=-]{8,16384}$/.test(accessToken) ||
-      (steamid && !/^\d{17}$/.test(steamid)) || !(expiresIn >= 0 && expiresIn < 1e10)) return;
-    const resultKey = STEAM_PAGE_RESULT_PREFIX + nonce;
-    try {
-      GM_setValue(resultKey, {v: 1, nonce, state, access_token: accessToken, steamid,
-        expires_in: expiresIn, createdAt: Date.now(), expires: Date.now() + 120000});
-      setTimeout(() => {
-        try {
-          const current = GM_getValue(resultKey, null);
-          if (current?.nonce === nonce) GM_deleteValue(resultKey);
-        } catch (_) {}
-      }, 130000);
-    } catch (_) {}
-  }
-  function xiaomiCallbackBridge() {
-    const params = new URLSearchParams(location.search);
-    const state = String(params.get('state') || '');
-    const code = String(params.get('code') || '');
-    if (!/^[a-f0-9]{32}$/.test(state) || !code || code.length > 4096 || /[&=\r\n\x00]/.test(code)) return;
-    // The auth window carries its nonce in window.name. The OAuth state is
-    // normally the same value; keep it as a fallback for redirects that clear
-    // the window name.
-    const nonce = /^sgs-xiaomi-([a-f0-9]{16,64})$/.exec(String(window.name || ''))?.[1] || state;
-    const resultKey = XIAOMI_PAGE_RESULT_PREFIX + nonce;
-    try {
-      GM_setValue(resultKey, {v: 1, nonce, state, code,
-        href: location.href.slice(0, 2048), createdAt: Date.now(), expires: Date.now() + 120000});
-      try { history.replaceState(null, '', location.pathname); } catch (_) {}
-      setTimeout(() => {
-        try {
-          const current = GM_getValue(resultKey, null);
-          if (current?.nonce === nonce) GM_deleteValue(resultKey);
-        } catch (_) {}
-      }, 130000);
-    } catch (_) {}
-  }
-  if (location.hostname === 'passport.vivo.com.cn') {
-    vivoPassportBridge();
-    return;
-  }
-  if (location.hostname === 'joint.vivo.com.cn' && location.pathname === '/game-subaccount-login/') {
-    vivoPageBridge();
-    return;
-  }
-  if (location.hostname === 'game-login.heytap.com' &&
-    location.pathname.startsWith('/game-union-h5/h5/client-login/')) {
-    oppoPageBridge();
-    return;
-  }
-  if (location.hostname === '10th-ly-login.sanguosha.com' &&
-    location.pathname === '/steam/oauth/callback.html') {
-    steamCallbackBridge();
-    return;
-  }
-  if ((location.protocol === 'http:' || location.protocol === 'https:') &&
-    location.hostname === 'game.xiaomi.com' && location.pathname === '/oauthcallback/mioauth') {
-    xiaomiCallbackBridge();
-    return;
-  }
-  try {
-    const now = Date.now();
-    for (const key of GM_listValues()) {
-      if (!key.startsWith('sgs-vivo-page-result-v1:') && !key.startsWith('sgs-oppo-page-result-v1:') &&
-        !key.startsWith(STEAM_PAGE_RESULT_PREFIX) && !key.startsWith(XIAOMI_PAGE_RESULT_PREFIX) &&
-        !key.startsWith(VIVO_PAGE_STATE_PREFIX)) continue;
-      const value = GM_getValue(key, null);
-      if (!value || !Number.isFinite(Number(value.expires)) || Number(value.expires) <= now) GM_deleteValue(key);
-    }
-    const pending = GM_getValue(VIVO_PENDING_NONCE_KEY, null);
-    if (!pending || !Number.isFinite(Number(pending.expires)) || Number(pending.expires) <= now) {
-      GM_deleteValue(VIVO_PENDING_NONCE_KEY);
-    }
-  } catch (_) {}
-})();
-
-/* DIRECT-ENGINE-BEGIN */
-(() => {
-  'use strict';
-  const VERSION = '1.1.1';
+  const VERSION = '1.0.9';
   const ORIGIN = 'https://web.sanguosha.com';
   const SESSION_KEY = 'wegame.qq.session.v1';
-  const SESSION_STORE_PREFIX = 'sgs-login-session-v3:';
-  // This is the local record's availability, not the channel credential lifetime.
-  // Provider-specific restore checks still decide whether the ticket is usable.
-  const SESSION_RECORD_EXPIRES_FOREVER = Number.MAX_SAFE_INTEGER;
   const HANDOFF_KEY = 'wegame.qq.handoff.v1';
-  const EMBEDDED_HANDOFF_KEY = 'sgs-direct-handoff-v1';
-  const EMBEDDED_HANDOFF_LIMIT = 65536;
-  const HANDOFF_TTL = 90000;
   const TAB_KEY = 'wegame.qq.tab.v1';
   const STEAM_PENDING_KEY = 'unified.steam.pending.v1';
   const STEAM_APP = '6730F3F4';
-  const STEAM_HOSTS = new Set(['api.steampowered.com', 'login.steampowered.com', 'store.steampowered.com', 'steamcommunity.com']);
-  const DIRECT_CLIENT_TOKEN_KEY = 'sgs-direct-client-token-v1';
-  const STEAM_PAGE_RESULT_KEY = 'sgs-steam-page-result-v1:';
+  const STEAM_HOSTS = new Set(['api.steampowered.com', 'login.steampowered.com', 'steamcommunity.com']);
   const XIAOMI_OAUTH_APP = '2882303761517516898';
   const XIAOMI_GAME_APP = '2882303761520011303';
   const XIAOMI_CALLBACK = 'http://game.xiaomi.com/oauthcallback/mioauth';
   const XIAOMI_CHANNEL = 320052;
-  const HUAWEI_CHANNEL = 320459;
-  const HUAWEI_APP = '111830943';
-  const HUAWEI_AUTH = 'https://oauth-login-drcn.platform.dbankcloud.com';
-  const HUAWEI_CALLBACK = 'com.huawei.apps.111830943:/oauth2redirect';
-  const HUAWEI_HOSTS = new Set(['oauth-login-drcn.platform.dbankcloud.com', 'oauth-login1.cloud.huawei.com',
-    'oauth-login.cloud.huawei.com', 'id1.cloud.huawei.com']);
   const HONOR_CHANNEL = 320463;
   const HONOR_APP = '104459689';
   const HONOR_AUTH = 'https://hnoauth-login.cloud.hihonor.com';
@@ -522,16 +92,15 @@
   const HONOR_GAME = 'https://gamecenter-api-drcn.hispace.hihonorcloud.com';
   const HONOR_HOSTS = new Set(['hnoauth-login.cloud.hihonor.com', 'hnid-drcn.cloud.hihonor.com',
     'hnid-drcn.platform.hihonorcloud.com', 'gamecenter-api-drcn.hispace.hihonorcloud.com']);
+  const HUAWEI_CHANNEL = 320459;
+  const HUAWEI_APP = '111830943';
+  const HUAWEI_AUTH = 'https://oauth-login-drcn.platform.dbankcloud.com';
+  const HUAWEI_CALLBACK = 'com.huawei.apps.111830943:/oauth2redirect';
+  const HUAWEI_HOSTS = new Set(['oauth-login-drcn.platform.dbankcloud.com', 'oauth-login1.cloud.huawei.com',
+    'oauth-login.cloud.huawei.com', 'id1.cloud.huawei.com']);
   const VIVO_CHANNEL = 320056;
   const VIVO_PACKAGE = 'com.yoka.sgstenth.vivo';
   const VIVO_HOSTS = new Set(['passport.vivo.com.cn', 'joint.vivo.com.cn']);
-  const VIVO_PAGE_RESULT_KEY = 'sgs-vivo-page-result-v1:';
-  const VIVO_PAGE_STATE_PREFIX = 'sgs-vivo-page-state-v1:';
-  const OPPO_PAGE_RESULT_KEY = 'sgs-oppo-page-result-v1:';
-  const XIAOMI_PAGE_RESULT_KEY = 'sgs-xiaomi-page-result-v1:';
-  const OPPO_CHANNEL = 320123;
-  const BILI_CHANNEL = '120133';
-  const WEGAME_CHANNEL = 320023;
   const PREFIX = 'jnd-wg-qq-';
   const CONFIG = {"wga_appid":"40000027","wga_app_key":"d41d8cd98f00b204e9800998ecf8427e","TD_SDK_APP_ID":"485","TD_CONFIG_ID":"60","any_platform_id":"326","any_platform_name":"wegame"};
   const QQ_APP = '101790992';
@@ -547,7 +116,7 @@
   // wrapper-8d4d9d2b.js (uc-res-gl.heytap.com), SHA-256
   // edafccdd6726064bdd06f9ef07bd45c3072b8b632b47df5a66441488122bb92a (2026-09-21).
   // These are shipped application constants, not user credentials.
-  const OPPO_HOSTS = new Set(['id-cn.heytap.com', 'id.heytap.com', 'client-uc.heytapmobi.com', 'isdk.heytapmobi.com', 'game-login.heytap.com']);
+  const OPPO_HOSTS = new Set(['id-cn.heytap.com', 'id.heytap.com', 'client-uc.heytapmobi.com', 'isdk.heytapmobi.com']);
   const OPPO_ORIGIN = 'https://id-cn.heytap.com';
   const OPPO_SIGN_KEY = '4iAEb620alQ8s8c8ss8o0K8sS';
   const OPPO_SIGN_SECRET = '80620774fE983aab1E8C564e3f213b62';
@@ -582,29 +151,70 @@
     '10th-sdk-login.sanguosha.com', 'web-login-api.sanguosha.com',
     'wpg-api.biligame.com', '10th-ly-login.sanguosha.com']);
   const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.0.0 Mobile Safari/537.36';
-  const GAME_ROUTES = Object.freeze({
-    xiaomi: Object.freeze({path: '/x/pc/index.php', channel: XIAOMI_CHANNEL, query: false, delivery: 'bootstrap'}),
-    vivo: Object.freeze({path: '/10/pc/index.php', channel: VIVO_CHANNEL, query: true, delivery: 'callback'}),
-    huawei: Object.freeze({path: '/10/pc/index.php', channel: HUAWEI_CHANNEL, query: true, delivery: 'callback'}),
-    honor: Object.freeze({path: '/10/pc/index.php', channel: HONOR_CHANNEL, query: true, delivery: 'callback'}),
-    oppo: Object.freeze({path: '/10/pc/index.php', channel: OPPO_CHANNEL, query: true, delivery: 'callback'}),
-    qq: Object.freeze({path: '/10/pc/index.php', channel: WEGAME_CHANNEL, query: true, delivery: 'callback'}),
-    wx: Object.freeze({path: '/10/pc/index.php', channel: WEGAME_CHANNEL, query: true, delivery: 'callback'}),
-    bilibili: Object.freeze({path: '/10/pc/bilibiliWD_index.php', channel: BILI_CHANNEL, query: true, delivery: 'callback'}),
-    steam: Object.freeze({path: '/10/pc/index.php', channel: null, query: true, delivery: 'callback'})
-  });
   const page = unsafeWindow;
-  // This copy is hosted by the multichannel userscript. The source panel is
-  // suppressed and only the normalized start/get/enter API is used.
-  if (!page.__JND_HOST) page.__JND_HOST = {kind: 'micro', source: 'sgs-multichannel'};
-  if (typeof page.__SGS_DIRECT_EVENT__ !== 'function') page.__SGS_DIRECT_EVENT__ = () => {};
-  const EMBEDDED = page.__JND_HOST?.source === 'sgs-multichannel';
   if (location.origin !== ORIGIN || window.top !== window) return;
 
   function failure(code, stage) {
     return Object.assign(new Error(code), {stage});
   }
   function assert(ok, code, stage) { if (!ok) throw failure(code, stage); }
+
+  // Lifecycle audit log: what this login manager saved, restored, entered and
+  // forgot, and when. Kept in private storage across reloads and separate from
+  // SESSION_KEY, so logout and forget never erase the history. Enumerated
+  // fields and account names only: no tokens, cookies, grants or codes.
+  const LIFECYCLE_KEY = 'unified.lifecycle.v1';
+  const LIFECYCLE_MAX = 500;
+  const LIFECYCLE_EVENT = 'jnd:unified-login-lifecycle';
+  function lifecycleLog() {
+    const log = GM_getValue(LIFECYCLE_KEY, null);
+    return log && Array.isArray(log.events) ? log : {v: 1, seq: 0, dropped: 0, events: []};
+  }
+  function lifecycle(type, data = {}) {
+    try {
+      const log = lifecycleLog();
+      const event = {seq: ++log.seq, t: Date.now(), version: VERSION, page: location.pathname, type, ...data};
+      log.events.push(event);
+      if (log.events.length > LIFECYCLE_MAX) log.dropped += log.events.splice(0, log.events.length - LIFECYCLE_MAX).length;
+      GM_setValue(LIFECYCLE_KEY, log);
+      announce(LIFECYCLE_EVENT, event);
+    } catch (error) {
+      console.error('[统一登录器]', {error: 'LIFECYCLE_LOG_FAILED', type, reason: error?.message});
+    }
+  }
+  // Page-visible bridge for the DEV lifecycle recorder, on the real page window.
+  // JSON strings cross script worlds; object details may arrive as null.
+  function bridgeTarget() {
+    return typeof page?.dispatchEvent === 'function' ? page : typeof window.dispatchEvent === 'function' ? window : null;
+  }
+  function announce(name, detail) {
+    const target = bridgeTarget(), Event = target?.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+    if (!target || !Event) return;
+    target.dispatchEvent(new Event(name, {detail: JSON.stringify(detail)}));
+  }
+  function sessionAge(created) { return Number.isFinite(created) ? Date.now() - created : null; }
+  function authExpiry(a) {
+    const at = Number(a?.wegame?.atExpires);
+    if (at > 0) return at;
+    const bili = Number(a?.bili?.expires);
+    if (bili > 0) return bili * 1000;
+    const steam = Number(a?.steam?.expires);
+    if (steam > 0) return steam;
+    const channel = Number(a?.huawei?.auth?.expires || a?.honor?.auth?.expires);
+    if (channel > 0) return channel;
+    const marker = Number(a?.expires);
+    return Number.isFinite(marker) && marker > 0 ? marker : null;
+  }
+  function sessionFacts(a) {
+    return {provider: a?.provider || 'qq', account: a?.account ?? null,
+      savedId: a?.savedId ?? a?.id ?? null, ageMs: sessionAge(a?.created)};
+  }
+  if (bridgeTarget()) {
+    bridgeTarget().addEventListener(LIFECYCLE_EVENT + '-request', () => {
+      try { announce(LIFECYCLE_EVENT + '-dump', lifecycleLog()); }
+      catch (error) { console.error('[统一登录器]', {error: 'LIFECYCLE_DUMP_FAILED', reason: error?.message}); }
+    });
+  }
   function fields(value, keys, stage) {
     assert(value && typeof value === 'object' && !Array.isArray(value), 'RESPONSE_SCHEMA_CHANGED', stage);
     const result = {};
@@ -617,790 +227,92 @@
     return result;
   }
   function validateGrant(value) {
-    const stage = 'handoff';
-    assert(value && typeof value === 'object' && !Array.isArray(value) &&
-      Object.prototype.toString.call(value) === '[object Object]',
-      'RESPONSE_SCHEMA_CHANGED', stage);
-    const keys = Object.keys(value);
-    assert(keys.length <= 64, 'RESPONSE_SCHEMA_CHANGED', stage);
-    const result = Object.create(null);
-    for (const key of keys) {
-      if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(key) ||
-        key === '__proto__' || key === 'prototype' || key === 'constructor') continue;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !Object.hasOwn(descriptor, 'value')) continue;
-      const item = descriptor.value;
-      if (typeof item === 'string') {
-        assert(item.length <= 8192, 'RESPONSE_SCHEMA_CHANGED', stage);
-        result[key] = item;
-      } else if (typeof item === 'number') {
-        assert(Number.isFinite(item), 'RESPONSE_SCHEMA_CHANGED', stage);
-        result[key] = item;
-      } else if (typeof item === 'boolean') {
-        result[key] = item;
-      }
-    }
-    for (const key of ['account', 'token', 'sign']) {
-      const item = result[key];
-      assert((typeof item === 'string' || typeof item === 'number') && String(item).length > 0,
-        'RESPONSE_SCHEMA_CHANGED', stage);
-      result[key] = String(item);
-    }
-    const timestamp = Number(result.timestamp);
+    const result = fields(value, ['account', 'token', 'sign'], 'handoff');
+    const timestamp = Number(value.timestamp);
     assert(Number.isFinite(timestamp) && timestamp > 0 && timestamp < 1e14,
-      'INVALID_TIMESTAMP', stage);
+      'INVALID_TIMESTAMP', 'handoff');
     result.timestamp = timestamp;
-    if (result.channel_id !== undefined) {
-      assert((typeof result.channel_id === 'string' || typeof result.channel_id === 'number') &&
-        String(result.channel_id).length <= 32, 'RESPONSE_SCHEMA_CHANGED', stage);
+    for (const key of ['open_id', 'user_type']) {
+      if (typeof value[key] === 'string' || typeof value[key] === 'number') result[key] = String(value[key]);
     }
     return result;
   }
-  function gameAuthFields() {
-    let self = null;
-    try { self = page.AccountInfo?.Self || page.AccountInfo?.self || null; } catch (_) {}
-    const fields = {};
-    for (const [name, value] of [
-      ['serverId', self?.SeverID || self?.ServerID],
-      ['loginAccount', self?.Account],
-      ['channelAccount', self?.ChannelAccount]
-    ]) {
-      if ((typeof value === 'string' || typeof value === 'number') && String(value).trim()) {
-        fields[name] = String(value).trim().slice(0, 256);
-      }
-    }
-    return fields;
-  }
-  let boundClientToken = '';
-  function emitGameAuth(provider, success, extra = {}) {
-    try {
-      page.__SGS_DIRECT_EVENT__({type: 'game-auth', provider, success: success !== false,
-        clientToken: boundClientToken, ...gameAuthFields(), ...extra});
-    } catch (_) {}
-  }
-  // The official GameMain in every build we have inspected gates scene entry on
-  // Laya.Browser.window.fontLoaded. A stale false/undefined value used to make
-  // platformLoginBack write AccountInfo and then return before the scene switch,
-  // which is exactly the "loading, then back to login" failure. Read the
-  // official entry function itself so a future build that removes this gate is
-  // not blocked forever by a flag the game no longer reads.
-  function entryRequiresFont(game) {
-    try {
-      const source = Function.prototype.toString.call(game?.EnterLoginScene || '');
-      if (source && !source.includes('[native code]')) return source.includes('fontLoaded');
-    } catch (_) {}
-    return true;
-  }
-  function loginReadiness(game, fontGate = true) {
-    const state = {parseConfiged: false, preloaded: false, fontLoaded: false,
-      checkLoaded: null, fontGate: !!fontGate, loadingView: false, ready: false, reason: ''};
-    if (!game) { state.reason = 'GAME_EXPORT_PENDING'; return state; }
-    try { state.parseConfiged = !!game.parseConfiged; } catch (_) {}
-    try { state.preloaded = !!game.preloaded; } catch (_) {}
-    try { state.loadingView = !!game.loadingView; } catch (_) {}
-    let font;
-    try { font = page.Laya?.Browser?.window?.fontLoaded; } catch (_) {}
-    state.fontLoaded = font === true;
-    if (!state.parseConfiged) state.reason = 'CONFIG_PENDING';
-    else if (!state.preloaded) state.reason = 'PRELOAD_PENDING';
-    else if (typeof game.CheckLoaded === 'function') {
-      try { state.checkLoaded = !!game.CheckLoaded(); }
-      catch (_) { state.checkLoaded = false; }
-      if (!state.checkLoaded) state.reason = 'CHECKLOADED_PENDING';
-    }
-    if (!state.reason && state.fontGate && !state.fontLoaded) state.reason = 'FONT_PENDING';
-    state.ready = !state.reason;
-    return state;
-  }
-  // A late injection can happen after the game has already removed its loading
-  // view. Official EnterLoginScene touches loadingView.ResetProgress() whenever
-  // preloaded is true, so provide a no-op view for that one call instead of
-  // letting a TypeError abort the handoff.
-  function callPlatformLoginBack(game, payload) {
-    let stub = null;
-    try {
-      if (game?.preloaded && !game.loadingView) {
-        stub = {ResetProgress() {}, ShowParseConfig() {}, ShowProgress() {}, ShowError() {},
-          parent: {removeChild() {}}, destroy() {}};
-        game.loadingView = stub;
-      }
-      return game.platformLoginBack(payload);
-    } finally {
-      if (stub && game.loadingView === stub) game.loadingView = null;
-    }
-  }
-  function installRequestBootstrap(provider, channel, grant, name) {
-    const original = {...grant, channel_id: channel};
-    const channelDescriptor = Object.getOwnPropertyDescriptor(page, 'channel_id');
-    if (!channelDescriptor || channelDescriptor.configurable) {
-      Object.defineProperty(page, 'channel_id', {configurable: false, get: () => channel, set() {}});
-    } else {
-      try { page.channel_id = channel; } catch (_) {}
-    }
-    assert(String(page.channel_id) === String(channel), 'PLATFORM_CHANNEL_MISMATCH', provider + '_bootstrap');
-
-    let request = original;
-    const requestDescriptor = Object.getOwnPropertyDescriptor(page, 'ReqObj');
-    if (!requestDescriptor || requestDescriptor.configurable) {
-      const existing = page.ReqObj && typeof page.ReqObj === 'object' && !Array.isArray(page.ReqObj) ? page.ReqObj : {};
-      request = Object.assign(existing, original);
-      Object.defineProperty(page, 'ReqObj', {
-        configurable: false,
-        get: () => request,
-        set: incoming => {
-          if (incoming && typeof incoming === 'object' && !Array.isArray(incoming)) {
-            Object.assign(request, incoming, original);
-          }
-        }
-      });
-    } else if (page.ReqObj && typeof page.ReqObj === 'object' && !Array.isArray(page.ReqObj)) {
-      request = Object.assign(page.ReqObj, original);
-    } else if (requestDescriptor.writable) {
-      page.ReqObj = original;
-      request = page.ReqObj;
-    } else if (requestDescriptor.set) {
-      page.ReqObj = original;
-      request = page.ReqObj;
-    }
-    assert(request && String(request.account || '') === String(original.account || '') &&
-      String(request.token || '') === String(original.token || '') &&
-      String(request.channel_id) === String(channel),
-      'PLATFORM_BOOTSTRAP_UNAVAILABLE', provider + '_bootstrap');
-
-    const previous = page.scriptContent;
-    let delegate = typeof previous === 'function' ? previous : null;
-    const wrap = function (scriptName, source) {
-      if (typeof delegate === 'function') {
-        try { source = delegate(scriptName, source); } catch (_) {}
-      }
-      if (typeof source !== 'string' || !scriptName || !scriptName.includes('main')) return source;
-      const markers = [
-        ['authHandler(e){let t=e.Protocol;',
-          "authHandler(e){let t=e.Protocol;try{window.__SGS_DIRECT_EVENT__({type:'game-auth',provider:'xiaomi',success:Number(t.errCode)===0,code:String(Number(t.errCode)||0)})}catch(_){}"],
-        ['notifyUserData(e){let t=e.Protocol;if(t.finished){',
-          "notifyUserData(e){let t=e.Protocol;if(t.finished){try{const a=AccountInfo.Self||{};window.__SGS_DIRECT_EVENT__({type:'game-auth',provider:'xiaomi',success:true,serverId:String(a.SeverID||''),loginAccount:String(a.Account||''),channelAccount:String(a.ChannelAccount||'')})}catch(_){}"]
-      ];
-      for (const [find, replacement] of markers) {
-        if (source.split(find).length === 2) source = source.replace(find, replacement);
-      }
-      return source;
-    };
-    const scriptDescriptor = Object.getOwnPropertyDescriptor(page, 'scriptContent');
-    if (!scriptDescriptor || scriptDescriptor.configurable) {
-      Object.defineProperty(page, 'scriptContent', {
-        configurable: true,
-        get: () => wrap,
-        set: value => { if (typeof value === 'function') delegate = value; }
-      });
-    } else {
-      try { page.scriptContent = wrap; } catch (_) {}
-    }
-    consumeHandoff(name);
-  }
-  // The host userscript keeps credentials only in this tab. A one-time
-  // sessionStorage handoff survives the same-tab navigation and is consumed
-  // before the game bootstrap can observe it; nothing is written to GM storage.
-  function readHandoff() {
-    if (!EMBEDDED) {
-      return GM_getValue(HANDOFF_KEY, null);
-    }
-    try {
-      const raw = sessionStorage.getItem(EMBEDDED_HANDOFF_KEY);
-      if (typeof raw !== 'string' || !raw || raw.length > EMBEDDED_HANDOFF_LIMIT) return null;
-      return JSON.parse(raw);
-    } catch (_) { return null; }
-  }
-  function writeHandoff(value) {
-    if (!EMBEDDED) { GM_setValue(HANDOFF_KEY, value); return; }
-    const raw = JSON.stringify(value);
-    assert(typeof raw === 'string' && raw.length <= EMBEDDED_HANDOFF_LIMIT, 'HANDOFF_TOO_LARGE', 'handoff');
-    sessionStorage.setItem(EMBEDDED_HANDOFF_KEY, raw);
-  }
-  function discardHandoff() {
-    if (!EMBEDDED) { GM_deleteValue(HANDOFF_KEY); return; }
-    try { sessionStorage.removeItem(EMBEDDED_HANDOFF_KEY); } catch (_) {}
-  }
-  function consumeHandoff(name) {
-    const current = readHandoff();
-    if (current?.name === name) discardHandoff();
-    if (window.name === name) window.name = '';
-  }
-  function cleanupHandoff() {
-    if (!EMBEDDED) {
-      const old = GM_getValue(HANDOFF_KEY, null);
-      if (old && !(old.expires > Date.now())) GM_deleteValue(HANDOFF_KEY);
-      return;
-    }
-    try {
-      const raw = sessionStorage.getItem(EMBEDDED_HANDOFF_KEY);
-      if (!raw) return;
-      const value = JSON.parse(raw);
-      if (!(value?.expires > Date.now())) sessionStorage.removeItem(EMBEDDED_HANDOFF_KEY);
-    } catch (_) { try { sessionStorage.removeItem(EMBEDDED_HANDOFF_KEY); } catch (_) {} }
-  }
-  // A session record is keyed by the host account and the exact auth provider.
-  // WeGame QQ and WeChat therefore never overwrite each other, even when the
-  // same profile later switches provider. A tab marker still contains only a
-  // record id, never a token.
-  const SESSION_PROVIDERS = new Set(['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor']);
-  const SESSION_PROFILE_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
-  let legacySessionMigrated = false;
-  function sessionText(value, limit = 32768) {
-    return (typeof value === 'string' || typeof value === 'number') && String(value).length > 0 &&
-      String(value).length <= limit ? String(value) : '';
-  }
-  function sessionStoreKey(profileId, provider) {
-    return SESSION_STORE_PREFIX + encodeURIComponent(profileId || '') + ':' + encodeURIComponent(provider || '');
-  }
-  function sessionStoreRecord(record) {
-    if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
-    const provider = sessionText(record.provider, 32);
-    const profileId = sessionText(record.profileId, 256);
-    const id = sessionText(record.id, 64);
-    // Records migrated from the pre-profile-keyed store have no profile id.
-    // They are still discoverable by provider + saved record id; new records
-    // are always written with a validated profile id by remember()/bindProfile().
-    if (!SESSION_PROVIDERS.has(provider) || (profileId && !SESSION_PROFILE_PATTERN.test(profileId)) ||
-      !/^[a-f0-9]{32}$/.test(id)) return null;
-    const expires = Number(record.expires);
-    const result = {v: 3, provider, profileId, id,
-      expires: Number.isFinite(expires) && expires > 0 ? expires : SESSION_RECORD_EXPIRES_FOREVER,
-      created: Number(record.created) || 0, updated: Number(record.updated) || 0,
-      account: sessionText(record.account, 256), device: sessionText(record.device, 256),
-      session: sessionText(record.session, 32768)};
-    if (provider === 'qq' || provider === 'wx') {
-      const wg = record.wegame;
-      if (wg && typeof wg === 'object') result.wegame = {
-        ...copiedFields(wg, ['openid', 'access_token', 'uid', 'channel']),
-        ct: sessionText(wg.ct, 32768),
-        atExpires: Number(wg.atExpires) || 0
-      };
-    } else if (provider === 'bilibili') {
-      const b = record.bili;
-      if (b && typeof b === 'object') result.bili = {
-        ...copiedFields(b, ['uid', 'access_key', 'uname']), expires: Number(b.expires) || 0
-      };
-    } else if (provider === 'steam') {
-      const s = record.steam;
-      if (s && typeof s === 'object') result.steam = {
-        ...copiedFields(s, ['access_token', 'steamID']),
-        expires: Number(s.expires) || 0, retainedUntil: Number(s.retainedUntil) || 0
-      };
-    } else if (provider === 'oppo') {
-      const o = record.oppo;
-      if (o && typeof o === 'object') result.oppo = {
-        ...copiedFields(o, ['token', 'ssoid', 'accountName']), credentialType: 'game-ticket'
-      };
-    } else if (provider === 'huawei' || provider === 'honor') {
-      const auth = record[provider]?.auth;
-      if (auth && typeof auth === 'object') result[provider] = {auth: {
-        ...copiedFields(auth, ['uid', 'session', 'username', 'gameUID']), expires: Number(auth.expires) || 0
-      }};
-    } else if (provider === 'xiaomi' || provider === 'vivo') {
-      const auth = record[provider];
-      if (auth && typeof auth === 'object') result[provider] =
-        copiedFields(auth, ['uid', 'session', 'username']);
-    }
-    return result;
-  }
-  function migrateLegacySession() {
-    if (legacySessionMigrated) return;
-    legacySessionMigrated = true;
-    let legacy = null;
-    try { legacy = GM_getValue(SESSION_KEY, null); } catch (_) { return; }
-    if (!legacy || typeof legacy !== 'object') return;
-    const provider = sessionText(legacy.provider, 32);
-    const record = sessionStoreRecord({...legacy, provider, profileId: ''});
-    if (!record) { try { GM_deleteValue(SESSION_KEY); } catch (_) {} return; }
-    const key = sessionStoreKey('', provider);
-    try {
-      const existing = sessionStoreRecord(GM_getValue(key, null));
-      if (!existing || record.updated >= existing.updated) GM_setValue(key, record);
-      GM_deleteValue(SESSION_KEY);
-    } catch (_) {}
-  }
-  function sessionRecords() {
-    migrateLegacySession();
-    const records = [];
-    let keys = [];
-    try { keys = GM_listValues(); } catch (_) { return records; }
-    for (const key of keys) {
-      if (typeof key !== 'string' || !key.startsWith(SESSION_STORE_PREFIX)) continue;
-      try {
-        const record = sessionStoreRecord(GM_getValue(key, null));
-        if (record) records.push({key, record});
-      } catch (_) {}
-    }
-    return records;
-  }
-  function savedSession(provider = '', profileId = '', id = '') {
-    let best = null;
-    for (const {record} of sessionRecords()) {
-      if (provider && record.provider !== provider) continue;
-      if (profileId && record.profileId !== profileId) continue;
-      if (id && record.id !== id) continue;
-      if (!best || Number(record.updated || 0) > Number(best.updated || 0)) best = record;
-    }
-    return best;
-  }
-  function sessionForAttempt(a) {
-    const provider = a?.provider || '';
-    const profileId = a?.__sgsProfileId || a?.profileId || '';
-    return (profileId && savedSession(provider, profileId)) || savedSession(provider, '', a?.savedId || '') ||
-      savedSession('', profileId);
-  }
-  function copiedFields(value, keys) {
-    const result = {};
-    if (!value || typeof value !== 'object') return result;
-    for (const key of keys) {
-      const item = value[key];
-      if ((typeof item === 'string' || typeof item === 'number') && String(item).length > 0 &&
-        String(item).length <= 32768) result[key] = String(item);
-    }
-    return result;
-  }
+  // A tab marker contains only a record id, never a token. It distinguishes
+  // our game from an official-account game opened elsewhere in this browser.
   function isWeGameTab() {
-    if (EMBEDDED) return false;
     try {
       const id = sessionStorage.getItem(TAB_KEY);
-      return !!id && !!savedSession('', '', id);
+      return !!id && GM_getValue(SESSION_KEY, null)?.id === id;
     } catch (_) { return false; }
   }
   if (location.pathname === '/login/x/index' && isWeGameTab()) {
     location.replace(ORIGIN + '/login/index.html'); return;
   }
   // Preserve the verified channel's official bootstrap contract. No auth in URLs.
-  if (location.pathname === '/10/pc/index.php' || location.pathname === '/10/pc/bilibiliWD_index.php' ||
-    location.pathname === '/x/pc/index.php') {
+  if (location.pathname === '/10/pc/index.php' || location.pathname === '/10/pc/bilibiliWD_index.php') {
     if (!window.name.startsWith(PREFIX)) {
-      if (isWeGameTab()) location.replace(ORIGIN + '/login/index.html');
+      if (isWeGameTab()) {
+        // A reload has no one-use grant left; the login page restores from storage.
+        const saved = GM_getValue(SESSION_KEY, null);
+        lifecycle('game.reload_bounced', sessionFacts(saved));
+        location.replace(ORIGIN + '/login/index.html');
+      }
       return;
     }
     const name = window.name;
-    let grant, payload;
+    let grant, payload, handoffResult = 'missing';
     try {
-      const handoff = readHandoff();
+      const handoff = GM_getValue(HANDOFF_KEY, null);
       if (handoff?.name === name) {
-        if (handoff.expires > Date.now() && handoff.expires <= Date.now() + HANDOFF_TTL + 5000) {
-          grant = handoff.grant; payload = handoff;
+        GM_deleteValue(HANDOFF_KEY); // Consume before exposing to the game bootstrap.
+        handoffResult = 'expired';
+        if (handoff.expires > Date.now() && handoff.expires <= Date.now() + 30000) {
+          grant = handoff.grant; payload = handoff; handoffResult = 'ok';
         }
       }
-    } catch (_) {}
-    if (/^[a-f0-9]{16,64}$/.test(payload?.clientToken || '')) {
-      boundClientToken = payload.clientToken;
-      try { page.__SGS_DIRECT_CLIENT_TOKEN__ = boundClientToken; } catch (_) {}
-    }
-    const finishHandoff = () => consumeHandoff(name);
-    if (location.pathname === '/x/pc/index.php') {
-      if (payload?.provider !== 'xiaomi' || !grant) {
-        consumeHandoff(name);
-        return;
-      }
-      try {
-        if (EMBEDDED) assert(/^[a-f0-9]{32}$/.test(payload.id || ''), 'SAVED_SESSION_INVALID', 'xiaomi_bootstrap');
-        else {
-          const saved = savedSession('xiaomi', '', payload.id);
-          assert(saved?.id === payload.id && saved.provider === 'xiaomi' && saved.expires > Date.now(),
-            'SAVED_SESSION_EXPIRED', 'xiaomi_bootstrap');
-        }
-        const result = validateGrant(grant);
-        installRequestBootstrap('xiaomi', XIAOMI_CHANNEL, result, name);
-      } catch (error) {
-        consumeHandoff(name);
-        console.error('[统一登录器]', {stage: 'xiaomi_bootstrap', error: error.message});
-      }
-      return;
-    }
+    } catch (_) { handoffResult = 'unreadable'; }
+    window.name = '';
+    lifecycle('game.handoff', {result: handoffResult, provider: payload?.provider || null, savedId: payload?.id || null});
     if (location.pathname === '/10/pc/bilibiliWD_index.php') {
-      if (payload?.provider !== 'bilibili') { consumeHandoff(name); return; }
+      if (payload?.provider !== 'bilibili') return;
       try {
+        const saved = GM_getValue(SESSION_KEY, null);
+        assert(saved?.id === payload.id && saved.provider === 'bilibili', 'SAVED_SESSION_EXPIRED', 'bili_handoff');
         const auth = validateBiliAuth(payload.bili);
         assert(auth.expires * 1000 > Date.now(), 'SAVED_SESSION_EXPIRED', 'bili_handoff');
         const result = validateBiliGrant(payload.grant);
-        if (EMBEDDED) assert(/^[a-f0-9]{32}$/.test(payload.id || ''), 'SAVED_SESSION_INVALID', 'bili_handoff');
-        else {
-          const saved = savedSession('bilibili', '', payload.id);
-          assert(saved?.id === payload.id && saved.provider === 'bilibili', 'SAVED_SESSION_EXPIRED', 'bili_handoff');
-          assert(result.account === saved.account, 'ACCOUNT_MISMATCH', 'bili_handoff');
-        }
-        deliverBili(auth, result, payload.id, finishHandoff);
-      } catch (error) {
-        consumeHandoff(name);
-        console.error('[统一登录器]', {stage: 'bili_handoff', error: error.message});
-      }
+        assert(result.account === saved.account, 'ACCOUNT_MISMATCH', 'bili_handoff');
+        deliverBili(auth, result, payload.id);
+      } catch (error) { console.error('[统一登录器]', {stage: 'bili_handoff', error: error.message}); }
       return;
     }
-    if (payload?.provider === 'bilibili') {
-      // Bilibili can redirect from bilibiliWD_index.php to the common 10/pc
-      // entry after the official page has consumed its own routing.  Do not
-      // throw away the verified grant merely because the path changed.
-      if (!grant || !payload.bili) { consumeHandoff(name); return; }
-      try {
-        const auth = validateBiliAuth(payload.bili);
-        assert(auth.expires * 1000 > Date.now(), 'SAVED_SESSION_EXPIRED', 'bili_handoff');
-        const result = validateBiliGrant(payload.grant);
-        if (EMBEDDED) assert(/^[a-f0-9]{32}$/.test(payload.id || ''), 'SAVED_SESSION_INVALID', 'bili_handoff');
-        else {
-          const saved = savedSession('bilibili', '', payload.id);
-          assert(saved?.id === payload.id && saved.provider === 'bilibili', 'SAVED_SESSION_EXPIRED', 'bili_handoff');
-          assert(result.account === saved.account, 'ACCOUNT_MISMATCH', 'bili_handoff');
-        }
-        deliverBili(auth, result, payload.id, finishHandoff);
-      } catch (error) {
-        consumeHandoff(name);
-        console.error('[统一登录器]', {stage: 'bili_handoff', error: error.message});
-      }
-      return;
-    }
+    if (payload?.provider === 'bilibili') return;
     if (payload?.provider === 'steam') {
       try {
-        if (EMBEDDED) assert(/^[a-f0-9]{32}$/.test(payload.id || ''), 'SAVED_SESSION_INVALID', 'steam_handoff');
-        else {
-          const saved = savedSession('steam', '', payload.id);
-          assert(saved?.id === payload.id && saved.provider === 'steam', 'SAVED_SESSION_EXPIRED', 'steam_handoff');
-        }
+        const saved = GM_getValue(SESSION_KEY, null);
+        assert(saved?.id === payload.id && saved.provider === 'steam', 'SAVED_SESSION_EXPIRED', 'steam_handoff');
         const result = validateSteamGrant(grant);
-        if (!EMBEDDED) {
-          const saved = savedSession('steam', '', payload.id);
-          assert(result.account === saved.account, 'ACCOUNT_MISMATCH', 'steam_handoff');
-        }
-        deliverSteam(result, payload.id, finishHandoff);
-      } catch (error) {
-        consumeHandoff(name);
-        console.error('[统一登录器]', {stage: 'steam_handoff', error: error.message});
-      }
+        assert(result.account === saved.account, 'ACCOUNT_MISMATCH', 'steam_handoff');
+        deliverSteam(result, payload.id);
+      } catch (error) { console.error('[统一登录器]', {stage: 'steam_handoff', error: error.message}); }
       return;
     }
-    if (['vivo', 'huawei', 'honor', 'oppo', 'qq', 'wx'].includes(payload?.provider)) {
-      try {
-        const savedProvider = payload.provider;
-        const provider = ['qq', 'wx'].includes(savedProvider) ? 'wegame' : savedProvider;
-        const stage = provider + '_handoff';
-        if (EMBEDDED) assert(/^[a-f0-9]{32}$/.test(payload.id || ''), 'SAVED_SESSION_INVALID', stage);
-        else {
-          const saved = savedSession(savedProvider, '', payload.id);
-          assert(saved?.id === payload.id && saved.provider === savedProvider && saved.expires > Date.now(),
-            'SAVED_SESSION_EXPIRED', stage);
-        }
-        const result = validateGrant(grant);
-        const channel = GAME_ROUTES[savedProvider].channel;
-        deliverPlatformGrant(provider, channel, result, payload.id, savedProvider, finishHandoff);
-      } catch (error) {
-        consumeHandoff(name);
-        console.error('[统一登录器]', {stage: payload.provider + '_handoff', error: error.message});
-      }
-      return;
-    }
-    if (!grant) { consumeHandoff(name); return; }
-    if (!EMBEDDED && ['vivo', 'huawei', 'honor'].includes(payload?.provider)) {
-      const saved = savedSession(payload.provider, '', payload.id);
-      if (saved?.provider !== payload.provider || saved.id !== payload.id || saved.expires <= Date.now()) return;
+    if (!grant) return;
+    if (['vivo', 'huawei', 'honor'].includes(payload?.provider)) {
+      const saved = GM_getValue(SESSION_KEY, null);
+      if (saved?.provider !== payload.provider || saved.id !== payload.id) return;
     }
     try { grant = validateGrant(grant); } catch (_) { return; }
-    const channel = GAME_ROUTES[payload?.provider]?.channel || WEGAME_CHANNEL;
+    const channel = payload?.provider === 'honor' ? HONOR_CHANNEL : payload?.provider === 'huawei' ? HUAWEI_CHANNEL : payload?.provider === 'vivo' ? VIVO_CHANNEL : payload?.provider === 'xiaomi' ? XIAOMI_CHANNEL : payload?.provider === 'oppo' ? 320123 : 320023;
     let request = {...grant, channel_id: channel};
     Object.defineProperty(page, 'channel_id', {configurable: true, get: () => channel, set: () => {}});
     Object.defineProperty(page, 'ReqObj', {
       configurable: true, get: () => request,
       set: value => { request = {...value, ...grant, channel_id: channel}; }
     });
-    consumeHandoff(name);
+
     return;
   }
-
-  function gameReadiness(game, fontGate, boundAt) {
-    const state = loginReadiness(game, fontGate);
-    if (!state.ready && game && Date.now() - boundAt >= 1500) {
-      const configKnown = typeof game.parseConfiged === 'boolean';
-      const preloadKnown = typeof game.preloaded === 'boolean';
-      // A future build may replace these flags with a different ready signal.
-      // Once the real game export has settled and neither old flag exists, let
-      // the official callback decide instead of waiting forever on a dead flag.
-      if (!configKnown && !preloadKnown && state.checkLoaded === null) {
-        state.unknownContract = true;
-        state.ready = true;
-        state.reason = '';
-      }
-    }
-    return state;
-  }
-
-  function installGameRequest(channel, grant, stage) {
-    let request = {...grant, channel_id: channel};
-    const channelDescriptor = Object.getOwnPropertyDescriptor(page, 'channel_id');
-    if (!channelDescriptor || channelDescriptor.configurable) {
-      Object.defineProperty(page, 'channel_id', {configurable: false, get: () => channel, set() {}});
-    } else {
-      assert(String(page.channel_id) === String(channel), 'PLATFORM_CHANNEL_MISMATCH', stage);
-    }
-    const requestDescriptor = Object.getOwnPropertyDescriptor(page, 'ReqObj');
-    if (!requestDescriptor || requestDescriptor.configurable) {
-      const existing = page.ReqObj && typeof page.ReqObj === 'object' && !Array.isArray(page.ReqObj)
-        ? page.ReqObj : {};
-      request = Object.assign(existing, grant, {channel_id: channel});
-      Object.defineProperty(page, 'ReqObj', {
-        configurable: false,
-        get: () => request,
-        set: incoming => {
-          if (incoming && typeof incoming === 'object' && !Array.isArray(incoming)) {
-            Object.assign(request, incoming, grant, {channel_id: channel});
-          }
-        }
-      });
-    } else if (page.ReqObj && typeof page.ReqObj === 'object' && !Array.isArray(page.ReqObj)) {
-      request = Object.assign(page.ReqObj, grant, {channel_id: channel});
-    } else if (requestDescriptor.writable || requestDescriptor.set) {
-      page.ReqObj = request;
-      request = page.ReqObj;
-    }
-    assert(String(request.channel_id) === String(channel), 'PLATFORM_CHANNEL_MISMATCH', stage);
-    return () => request;
-  }
-
-  // One delivery state machine for every channel that exposes the official
-  // GameMain.platformLoginBack bridge. It deliberately has no dependency on
-  // observing EnterLoginScene once: the game may export late, may call the
-  // entry before config/font completion, or may replace its exported class.
-  function deliverGameGrant(provider, label, channel, grant, savedId, savedProvider, finishHandoff, options = {}) {
-    const stage = provider + '_handoff';
-    const expectedPaths = options.expectedPaths || [options.expectedPath || '/10/pc/index.php'];
-    assert(expectedPaths.includes(location.pathname), 'PLATFORM_ROUTE_MISMATCH', stage);
-    const routeChannels = new URLSearchParams(location.search).getAll('channel_id');
-    assert(routeChannels.length <= 1 && routeChannels.every(value => value === String(channel)),
-      'PLATFORM_CHANNEL_MISMATCH', stage);
-    const getRequest = installGameRequest(channel, grant, stage);
-    const hasCredential = () => {
-      try {
-        const self = page.AccountInfo?.Self;
-        return !!(self && (self.Token || self.Ticket || self.WeGameTicket || self.PlatformID));
-      } catch (_) { return false; }
-    };
-    let game = null, originalEntry = null, gate = null, fontGate = true, boundAt = 0;
-    let complete = false, entryCalled = false, pendingEntry = false, platformCalled = false;
-    let platformCalledAt = 0, platformCallActive = false, deliveryAttempts = 0;
-    let exportInstalled = false, exported, candidateSeen = null;
-    let logoutContext = null, logoutOriginal = null, logoutGate = null;
-    const previous = Object.getOwnPropertyDescriptor(page, 'Sgs');
-    const deadline = Date.now() + 120000;
-    handoffToast(label + ' 登录已收到，正在等待游戏就绪…');
-    const readiness = () => gameReadiness(game, fontGate, boundAt);
-    const isReady = () => readiness().ready;
-    const report = (available, reason) => {
-      let snapshot = {};
-      try { snapshot = readiness(); } catch (_) {}
-      console[available ? 'info' : 'error']('[统一登录器]',
-        {stage, available, source: 'Sgs.platformLoginBack', ...snapshot, ...(reason ? {reason} : {})});
-      handoffToast(available ? label + ' 登录已交给游戏，正在进入…'
-        : label + ' 登录交接失败：' + (reason || '游戏未就绪'), !available);
-      emitGameAuth(provider, available, available ? {} : {code: String(reason || 'GAME_HANDOFF_FAILED').slice(0, 160)});
-    };
-    const current = (requireChannel = false) => {
-      const saved = savedSession(savedProvider, '', savedId);
-      if (saved) assert(saved.id === savedId && saved.provider === savedProvider && saved.expires > Date.now(),
-        'SAVED_SESSION_EXPIRED', stage);
-      else assert(EMBEDDED && /^[a-f0-9]{32}$/.test(savedId), 'SAVED_SESSION_INVALID', stage);
-      if (requireChannel || page.ReqObj?.channel_id !== undefined) {
-        assert(String(page.ReqObj?.channel_id) === String(channel), 'PLATFORM_CHANNEL_MISMATCH', stage);
-      }
-      options.validate?.();
-      assert(Date.now() < deadline, 'PLATFORM_GAME_CALLBACK_UNAVAILABLE', stage);
-    };
-    const getExport = () => exported;
-    const restoreExport = () => {
-      if (!exportInstalled) return;
-      exportInstalled = false;
-      const descriptor = Object.getOwnPropertyDescriptor(page, 'Sgs');
-      if (descriptor?.get !== getExport || descriptor?.set !== setExport) return;
-      if (exported !== undefined) Object.defineProperty(page, 'Sgs',
-        {value: exported, writable: true, enumerable: previous?.enumerable ?? true, configurable: true});
-      else if (previous) Object.defineProperty(page, 'Sgs', previous);
-      else delete page.Sgs;
-    };
-    const finish = (available, reason) => {
-      if (complete) return;
-      complete = true; clearInterval(timer);
-      if (game?.EnterLoginScene === gate) game.EnterLoginScene = originalEntry;
-      restoreLogoutGate();
-      restoreExport();
-      try { options.cleanup?.(); } catch (_) {}
-      if (available) {
-        report(true);
-        try { finishHandoff(); } catch (_) {}
-      } else if (reason) report(false, reason);
-    };
-    const enterOriginal = (context, args) => {
-      // A callback that did not actually populate AccountInfo must never be
-      // followed by the unauthenticated entry: that is the exact path which
-      // calls GameContext.GotoLogout() and sends the tab back to /login/x/index.
-      // In a real page AccountInfo is present; the empty-object allowance is
-      // only for a deliberately minimal test harness.
-      let hasAccountInfo = false;
-      try { hasAccountInfo = !!page.AccountInfo; } catch (_) {}
-      if (hasAccountInfo && !hasCredential()) {
-        pendingEntry = true;
-        return;
-      }
-      try {
-        const result = originalEntry.apply(context, args);
-        entryCalled = true; pendingEntry = false;
-        finish(true);
-        return result;
-      } catch (error) {
-        finish(false, error.message);
-        throw error;
-      }
-    };
-    const invokePlatform = () => {
-      if (complete || platformCalled) return;
-      current(true);
-      assert(typeof game?.platformLoginBack === 'function',
-        'PLATFORM_GAME_CALLBACK_UNAVAILABLE', stage);
-      platformCalled = true; platformCalledAt = Date.now(); platformCallActive = true;
-      deliveryAttempts += 1;
-      try {
-        callPlatformLoginBack(game, {code: 0, data: getRequest()});
-      } catch (error) {
-        platformCalled = false;
-        throw error;
-      } finally {
-        platformCallActive = false;
-      }
-      pendingEntry = !entryCalled && !complete;
-    };
-    function restoreLogoutGate() {
-      if (!logoutContext || logoutContext.GotoLogout !== logoutGate) return;
-      try { logoutContext.GotoLogout = logoutOriginal; } catch (_) {}
-      logoutContext = null; logoutOriginal = null; logoutGate = null;
-    }
-    // Some game revisions export Sgs after the resource loader has already
-    // called EnterLoginScene.  The scene guard is a second, version-independent
-    // place to stop that one unauthenticated redirect while this verified
-    // handoff is still alive.  It never changes a successful login path and is
-    // removed as soon as the grant has been handed to the official callback.
-    const installLogoutGate = () => {
-      if (complete) return;
-      try {
-        const context = page.GameContext;
-        if (!context || typeof context.GotoLogout !== 'function') return;
-        if (logoutGate && context.GotoLogout === logoutGate) return;
-        if (context.GotoLogout.__sgsHandoffGuard) return;
-        const original = context.GotoLogout;
-        const guarded = function (...args) {
-          if (complete) return original.apply(this, args);
-          try { current(); } catch (_) { return original.apply(this, args); }
-          if (hasCredential()) return original.apply(this, args);
-          pendingEntry = true;
-          try { if (isReady() && !platformCalled) invokePlatform(); } catch (_) {}
-          return undefined;
-        };
-        guarded.__sgsHandoffGuard = true;
-        logoutContext = context; logoutOriginal = original; logoutGate = guarded;
-        try { context.GotoLogout = guarded; } catch (_) {
-          try { Object.defineProperty(context, 'GotoLogout',
-            {configurable: true, writable: true, value: guarded}); }
-          catch (_) { restoreLogoutGate(); }
-        }
-      } catch (_) {}
-    };
-    const bind = candidate => {
-      if (!candidate || typeof candidate.EnterLoginScene !== 'function' ||
-        typeof candidate.platformLoginBack !== 'function') return false;
-      if (candidate === game && gate && candidate.EnterLoginScene === gate) return true;
-      if (game && game.EnterLoginScene === gate) game.EnterLoginScene = originalEntry;
-      game = candidate; originalEntry = game.EnterLoginScene; boundAt = Date.now();
-      installLogoutGate();
-      platformCalled = false; platformCalledAt = 0; platformCallActive = false;
-      entryCalled = false; pendingEntry = false;
-      try { Object.defineProperty(game, '__sgsEntryContract', {configurable: true,
-        value: Function.prototype.toString.call(originalEntry).slice(0, 4000)}); } catch (_) {}
-      try {
-        const entrySource = Function.prototype.toString.call(originalEntry);
-        fontGate = !entrySource.includes('[native code]') && entrySource.includes('fontLoaded');
-      } catch (_) { fontGate = true; }
-      gate = function (...args) {
-        if (complete) return originalEntry.apply(this, args);
-        const explicitResult = args[0] === true;
-        // Never let the unauthenticated entry run while a verified grant is
-        // waiting. Older builds call EnterLoginScene(false), then notice that
-        // AccountInfo is empty and immediately navigate to /login/x/index.
-        // Deferring that draw is what makes the handoff timing-independent.
-        if (!isReady()) { pendingEntry = true; return; }
-        if (platformCalled) {
-          if (entryCalled) return originalEntry.apply(this, args);
-          // The official callback always uses EnterLoginScene(true), but a
-          // future build may call it without the flag.  Once the official
-          // platformLoginBack has populated AccountInfo, force the authenticated
-          // form so WeGame/Steam never fall back into their native loginTicket
-          // branch and so no unauthenticated entry can call GotoLogout.
-          if (explicitResult || platformCallActive) return enterOriginal(this, [true]);
-          pendingEntry = true;
-          return;
-        }
-        try {
-          invokePlatform();
-          if (!entryCalled && !complete) pendingEntry = true;
-          return;
-        } catch (error) {
-          finish(false, error.message);
-          throw error;
-        }
-      };
-      game.EnterLoginScene = gate;
-      if (isReady()) {
-        if (!platformCalled) invokePlatform();
-        else if (!entryCalled) enterOriginal(game, [true]);
-      }
-      return true;
-    };
-    function setExport(value) {
-      exported = value;
-      if (value && value !== candidateSeen) {
-        candidateSeen = value;
-        bind(value);
-      }
-    }
-    const timer = setInterval(() => {
-      if (complete) return;
-      try {
-        installLogoutGate();
-        current();
-        const candidate = page.Sgs;
-        if (candidate && (candidate !== game || candidate.EnterLoginScene !== gate)) {
-          candidateSeen = candidate;
-          bind(candidate);
-        }
-        if (platformCalled && !entryCalled && Date.now() - platformCalledAt >= 350 && isReady()) {
-          enterOriginal(game, [true]);
-          return;
-        }
-        if (!platformCalled && isReady()) invokePlatform();
-      } catch (error) { finish(false, error.message); }
-    }, 100);
-    window.addEventListener('pagehide', () => {
-      if (complete) return;
-      complete = true; clearInterval(timer);
-      if (game?.EnterLoginScene === gate) game.EnterLoginScene = originalEntry;
-      restoreLogoutGate();
-      restoreExport();
-    }, {once: true});
-    try {
-      current();
-      installLogoutGate();
-      if (page.Sgs) bind(page.Sgs);
-      else {
-        assert(!previous || previous.configurable, 'PLATFORM_EXPORT_UNAVAILABLE', stage);
-        exported = previous?.value; exportInstalled = true;
-        Object.defineProperty(page, 'Sgs', {configurable: true, enumerable: true, get: getExport, set: setExport});
-      }
-    } catch (error) { finish(false, error.message); }
-  }
-
-  function deliverPlatformGrant(provider, channel, grant, savedId, savedProvider = provider, finishHandoff = () => {}) {
-    const label = {vivo: 'Vivo', huawei: '华为', honor: '荣耀', oppo: 'OPPO', wegame: 'WeGame'}[provider];
-    assert(label, 'PROVIDER_UNAVAILABLE', provider + '_handoff');
-    deliverGameGrant(provider, label, channel, grant, savedId, savedProvider, finishHandoff);
-  }
-
 
   function validateSteamGrant(value) {
     const channel = String(value?.channel_id);
@@ -1414,18 +326,70 @@
     }
     return grant;
   }
-  function deliverSteam(grant, savedId, finishHandoff = () => {}) {
-    deliverGameGrant('steam', 'Steam', grant.channel_id, grant, savedId, 'steam', finishHandoff, {
-      expectedPath: '/10/pc/index.php',
-      validate: () => {
-        const saved = savedSession('steam', '', savedId);
-        if (saved) assert(saved.account === grant.account, 'ACCOUNT_MISMATCH', 'steam_handoff');
-        assert(String(page.ReqObj?.channel_id) === String(grant.channel_id),
-          'STEAM_CHANNEL_MISMATCH', 'steam_handoff');
+  function deliverSteam(grant, savedId) {
+    // Official GameMain 47a1fe4d1, 2026-09-21: EnterLoginScene waits for the
+    // native Steam loginTicket unless called with true. platformLoginBack is
+    // the exported, lexical-context-preserving entry for a server-issued grant.
+    const channel = Number(grant.channel_id);
+    let request = {...grant}, game, originalEntry, gate, timer, finished = false;
+    let exported, exportInstalled = false;
+    const previous = Object.getOwnPropertyDescriptor(page, 'Sgs');
+    Object.defineProperty(page, 'channel_id', {configurable: true, get: () => channel, set: () => {}});
+    Object.defineProperty(page, 'ReqObj', {configurable: true, get: () => request,
+      set: value => { request = {...value, ...grant}; }});
+    const getExport = () => exported;
+    const restoreExport = () => {
+      if (!exportInstalled) return;
+      exportInstalled = false;
+      const d = Object.getOwnPropertyDescriptor(page, 'Sgs');
+      if (d?.get !== getExport || d?.set !== setExport) return;
+      if (exported !== undefined) Object.defineProperty(page, 'Sgs',
+        {value: exported, writable: true, configurable: true, enumerable: previous?.enumerable ?? true});
+      else if (previous) Object.defineProperty(page, 'Sgs', previous);
+      else delete page.Sgs;
+    };
+    const finish = reason => {
+      if (finished) return;
+      finished = true; clearTimeout(timer);
+      if (game && gate && game.EnterLoginScene === gate) game.EnterLoginScene = originalEntry;
+      restoreExport();
+      if (reason) console.error('[统一登录器]', {stage: 'steam_handoff', available: false, reason});
+    };
+    const bind = value => {
+      assert(typeof value?.EnterLoginScene === 'function' && typeof value?.platformLoginBack === 'function',
+        'STEAM_GAME_CALLBACK_UNAVAILABLE', 'steam_handoff');
+      game = value; originalEntry = game.EnterLoginScene;
+      gate = function (...args) {
+        if (finished) return originalEntry.apply(this, args);
+        try {
+          const saved = GM_getValue(SESSION_KEY, null);
+          assert(saved?.id === savedId && saved.provider === 'steam' && saved.account === grant.account,
+            'SAVED_SESSION_EXPIRED', 'steam_handoff');
+          assert(String(page.ReqObj?.channel_id) === grant.channel_id, 'STEAM_CHANNEL_MISMATCH', 'steam_handoff');
+          if (!game.parseConfiged || !game.preloaded) return originalEntry.apply(this, args);
+          finish(); game.platformLoginBack({code: 0, data: grant});
+          console.info('[统一登录器]', {stage: 'steam_handoff', available: true, source: 'Sgs.platformLoginBack'});
+          grant = null;
+        } catch (error) { finish(error.message); }
+      };
+      game.EnterLoginScene = gate;
+      if (game.parseConfiged && game.preloaded) gate.call(game);
+    };
+    function setExport(value) {
+      exported = value; restoreExport();
+      try { bind(value); } catch (error) { finish(error.message); }
+    }
+    timer = setTimeout(() => finish('STEAM_GAME_CALLBACK_UNAVAILABLE'), 120000);
+    window.addEventListener('pagehide', () => finish(), {once: true});
+    try {
+      if (page.Sgs) bind(page.Sgs);
+      else {
+        assert(!previous || previous.configurable, 'STEAM_EXPORT_UNAVAILABLE', 'steam_handoff');
+        exported = previous?.value; exportInstalled = true;
+        Object.defineProperty(page, 'Sgs', {configurable: true, enumerable: true, get: getExport, set: setExport});
       }
-    });
+    } catch (error) { finish(error.message); }
   }
-
 
   function validateBiliAuth(value) {
     const auth = fields(value, ['uid', 'access_key'], 'bili_auth');
@@ -1442,42 +406,105 @@
     if (value.channel_account !== undefined) grant.channel_account = fields(value, ['channel_account'], 'bili_grant').channel_account;
     return grant;
   }
-  function handoffToast(text, error = false) {
-    try {
-      const id = 'sgs-direct-handoff-toast';
-      let node = document.getElementById(id);
-      if (!node) {
-        node = document.createElement('div');
-        node.id = id; node.setAttribute('role', 'status'); node.setAttribute('aria-live', 'polite');
-        node.style.cssText = 'position:fixed;right:18px;top:18px;z-index:2147483647;max-width:360px;' +
-          'padding:12px 15px;border-radius:14px;font:13px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text",' +
-          '"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#f5f5f7;background:rgba(28,28,30,.92);' +
-          'border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 36px rgba(0,0,0,.34);' +
-          '-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);' +
-          'transition:opacity 180ms ease,transform 180ms ease;transform:translateY(-4px)';
-        (document.body || document.documentElement).append(node);
-        requestAnimationFrame(() => { node.style.opacity = '1'; node.style.transform = 'translateY(0)'; });
-        node.style.opacity = '0';
+  function deliverBili(auth, grant, savedId) {
+    // Current official mainVersion 47a1fe4d1, checked 2026-09-21.
+    // main.min.js SHA-256 553ec8dbba021c2c44fbd72580eaeb2acfa06d878676b9f54ba5ef34b3353fa2.
+    // Sgs is the exported GameMain class. EnterLoginScene(false) displays the
+    // Bilibili login button; platformLoginBack performs SetRequestInfo and then
+    // EnterLoginScene(true). Reuse the already verified server grant exactly
+    // when the official preload/config callbacks first request login entry.
+    let complete = false, game = null, originalEntry = null, gate = null;
+    let exportInstalled = false, exported;
+    const previous = Object.getOwnPropertyDescriptor(page, 'Sgs');
+    const deadline = Date.now() + 120000;
+    const report = (available, reason) => console[available ? 'info' : 'error']('[统一登录器]',
+      {stage: 'bili_handoff', available, source: 'Sgs.platformLoginBack', ...(reason ? {reason} : {})});
+    const current = (requireChannel = false) => {
+      const saved = GM_getValue(SESSION_KEY, null);
+      assert(saved?.id === savedId && saved.provider === 'bilibili' && saved.account === grant.account &&
+        auth.expires * 1000 > Date.now(), 'SAVED_SESSION_EXPIRED', 'bili_handoff');
+      if (requireChannel || page.ReqObj?.channel_id !== undefined) {
+        assert(String(page.ReqObj?.channel_id) === '120133', 'BILI_CHANNEL_MISMATCH', 'bili_handoff');
       }
-      node.textContent = text;
-      node.style.background = error ? 'rgba(255,69,58,.94)' : 'rgba(28,28,30,.92)';
-      clearTimeout(node.__sgsHandoffTimer);
-      node.__sgsHandoffTimer = setTimeout(() => {
-        node.style.opacity = '0'; node.style.transform = 'translateY(-4px)';
-        setTimeout(() => node.remove(), 220);
-      }, error ? 15000 : 6500);
-    } catch (_) {}
-  }
-  function deliverBili(auth, grant, savedId, finishHandoff = () => {}) {
-    deliverGameGrant('bilibili', 'B 站', '120133', grant, savedId, 'bilibili', finishHandoff, {
-      expectedPaths: ['/10/pc/bilibiliWD_index.php', '/10/pc/index.php'],
-      validate: () => {
-        assert(auth.expires * 1000 > Date.now(), 'SAVED_SESSION_EXPIRED', 'bili_handoff');
-        const saved = savedSession('bilibili', '', savedId);
-        if (saved) assert(saved.account === grant.account, 'ACCOUNT_MISMATCH', 'bili_handoff');
-      },
-      cleanup: () => { auth = null; }
-    });
+      assert(Date.now() < deadline, 'BILI_GAME_CALLBACK_UNAVAILABLE', 'bili_handoff');
+    };
+    const getExport = () => exported;
+    const restoreExport = () => {
+      if (!exportInstalled) return;
+      exportInstalled = false;
+      const descriptor = Object.getOwnPropertyDescriptor(page, 'Sgs');
+      if (descriptor?.get !== getExport || descriptor?.set !== setExport) return;
+      if (exported !== undefined) Object.defineProperty(page, 'Sgs',
+        {value: exported, writable: true, enumerable: previous?.enumerable ?? true, configurable: true});
+      else if (previous) Object.defineProperty(page, 'Sgs', previous);
+      else delete page.Sgs;
+    };
+    const finish = () => {
+      complete = true; clearInterval(timer);
+      if (game?.EnterLoginScene === gate) game.EnterLoginScene = originalEntry;
+      restoreExport(); auth = null; grant = null;
+    };
+    const deliver = () => {
+      current(true);
+      assert(typeof page.BiLiBiLiLoginResult === 'function', 'BILI_GAME_CALLBACK_UNAVAILABLE', 'bili_handoff');
+      const savedGetToken = game.GetWeGameToken;
+      let accepted = false;
+      // Preserve the official callback's PlatformID, GameID and username writes.
+      // Its synchronous token exchange consumes the genuine grant already
+      // returned by /bilibili/login, instead of issuing that request again.
+      const useGrant = function () {
+        assert(!accepted, 'BILI_DUPLICATE_DELIVERY', 'bili_handoff');
+        current(true); accepted = true;
+        game.GetWeGameToken = savedGetToken;
+        game.EnterLoginScene = originalEntry;
+        game.platformLoginBack({code: 0, data: grant});
+      };
+      try {
+        game.GetWeGameToken = useGrant;
+        page.BiLiBiLiLoginResult(0, '', auth.access_key, auth.uname, '9869');
+        assert(accepted, 'BILI_GRANT_NOT_CONSUMED', 'bili_handoff');
+        report(true);
+      } finally {
+        if (game.GetWeGameToken === useGrant) game.GetWeGameToken = savedGetToken;
+        finish();
+      }
+    };
+    const bind = candidate => {
+      assert(candidate && typeof candidate.EnterLoginScene === 'function' &&
+        typeof candidate.platformLoginBack === 'function' && typeof candidate.GetWeGameToken === 'function' &&
+        typeof candidate.LoginTicketResult === 'function', 'BILI_GAME_CALLBACK_UNAVAILABLE', 'bili_handoff');
+      game = candidate; originalEntry = game.EnterLoginScene;
+      gate = function (...args) {
+        if (complete) return originalEntry.apply(this, args);
+        try {
+          current(true);
+          if (!game.parseConfiged || !game.preloaded) return originalEntry.apply(this, args);
+          return deliver();
+        } catch (error) { finish(); report(false, error.message); }
+      };
+      game.EnterLoginScene = gate;
+      if (game.parseConfiged && game.preloaded) gate.call(game);
+    };
+    function setExport(value) {
+      exported = value; restoreExport();
+      try { bind(value); } catch (error) { finish(); report(false, error.message); }
+    }
+    const timer = setInterval(() => {
+      if (complete) return;
+      try { current(); } catch (error) { finish(); report(false, error.message); }
+    }, 1000);
+    window.addEventListener('pagehide', finish, {once: true});
+    try {
+      current();
+      if (page.Sgs) bind(page.Sgs);
+      else {
+        // Capture the documented public export at assignment, before preload
+        // completion can show its login button. Remove this accessor immediately.
+        assert(!previous || previous.configurable, 'BILI_EXPORT_UNAVAILABLE', 'bili_handoff');
+        exported = previous?.value; exportInstalled = true;
+        Object.defineProperty(page, 'Sgs', {configurable: true, enumerable: true, get: getExport, set: setExport});
+      }
+    } catch (error) { finish(); report(false, error.message); }
   }
 
   const random = () => crypto.randomUUID().replaceAll('-', '');
@@ -1938,8 +965,7 @@
 
   const diagnostics = [];
   let attempt = null, busy = false, disposed = false;
-  let middle = null, ui = null, releaseLock = null, lockOwnerToken = '';
-  let runGeneration = 0, activeRunGeneration = 0;
+  let middle = null, ui = null, releaseLock = null;
   let microError = null; // 微端桥用：最近一次失败的 {code, stage}，start／cancel 时清空
   function record(stage, started, status, code) {
     const entry = {version: VERSION, stage, ms: Math.round(performance.now() - started), status, ...(code ? {code} : {})};
@@ -1947,33 +973,67 @@
     if (diagnostics.length > 80) diagnostics.shift();
     console.info('[统一登录器]', JSON.stringify(entry)); // No bodies, query strings, cookies or credentials.
   }
+  function requestDiagnostic(a, stage, url, method, mode) {
+    if (!['honor', 'xiaomi'].includes(a.provider)) return () => {};
+    const u = new URL(url), started = performance.now(), previous = a.lastResponse;
+    let ended = false;
+    const base = {stage, method, endpoint: u.origin + u.pathname, mode,
+      cookieCount: a.cookies.forURL(url).length,
+      ...(previous ? {lastResponse: previous} : {})};
+    const update = (event, response, error) => {
+      if (attempt !== a || disposed || ended) return;
+      if (event !== 'request') ended = true;
+      const detail = {...base, event, ms: Math.round(performance.now() - started)};
+      if (response) {
+        detail.status = Number.isFinite(response.status) ? response.status : 0;
+        if (Number.isInteger(response.readyState)) detail.readyState = response.readyState;
+        detail.hasResponseHeaders = !!response.responseHeaders;
+        const target = responseHeader(response.responseHeaders, 'location');
+        detail.hasLocation = !!target;
+        if (target) {
+          try {
+            const next = new URL(target, url);
+            detail.locationScheme = next.protocol;
+            detail.locationEndpoint = next.origin + next.pathname;
+          } catch (_) {}
+        }
+        detail.setCookieCount = (String(response.responseHeaders || '').match(/^set-cookie:/gim) || []).length;
+        detail.responseLength = typeof response.responseText === 'string' ? response.responseText.length : 0;
+      }
+      // Browser errors can embed full URLs. Retain their diagnostic identifiers
+      // and standard messages, never account values, response bodies or headers.
+      const messages = [response?.statusText, response?.error, response?.message, error?.message]
+        .filter(v => typeof v === 'string').join('\n');
+      const networkCode = /\b(?:net::)?ERR_[A-Z_]+\b/.exec(messages)?.[0];
+      const reason = ['Failed to fetch', 'Network request failed', 'Failed to execute',
+        'NetworkError when attempting to fetch resource.', 'Load failed'].find(v => messages.includes(v));
+      if (networkCode) detail.networkCode = networkCode;
+      if (reason) detail.reason = reason;
+      if (error && /^[A-Z][A-Z_0-9-]*$/.test(error.message)) detail.error = error.message;
+      a.requestDiagnostic = detail;
+      if (event !== 'request') a.lastResponse = {stage, event, status: detail.status ?? 0};
+      if (error && a.provider === 'honor') error.requestDiagnostic = detail;
+      if (a.provider === 'honor' && ui?.output) ui.output.textContent = JSON.stringify({version: VERSION, ...detail}, null, 2);
+      console.info('[统一登录器]', JSON.stringify({version: VERSION, ...detail}));
+    };
+    update('request');
+    return update;
+  }
   function active(a) {
     assert(!disposed && attempt === a && Date.now() < a.expires, 'ATTEMPT_EXPIRED', a.stage);
-    if (a.restored) assert(sessionForAttempt(a)?.id === a.savedId, 'SAVED_SESSION_EXPIRED', a.stage);
-  }
-  function normalizeClientToken(value) {
-    const token = typeof value === 'string' ? value : '';
-    assert(/^[a-f0-9]{16,64}$/.test(token), 'CLIENT_TOKEN_INVALID', 'setup');
-    return token;
-  }
-  function emitDirectEvent(event) {
-    const token = event?.clientToken || attempt?.clientToken || boundClientToken || '';
-    try { return page.__SGS_DIRECT_EVENT__({...event, clientToken: token}); } catch (_) { return ''; }
-  }
-  function setBrowserNotice(a, text) {
-    if (!a || !text || a.browserNotice === text) return;
-    if (attempt && attempt !== a) return;
-    a.browserNotice = text;
-    if (ui?.output && ui.output.textContent !== text) ui.output.textContent = text;
+    if (a.savedId) {
+      const saved = GM_getValue(SESSION_KEY, null);
+      assert(saved?.id === a.savedId, 'SAVED_SESSION_EXPIRED', a.stage);
+    }
   }
   function transport(a, url, options = {}) {
     active(a);
     const stage = options.stage || a.stage;
-    const hosts = options.qq ? QQ_HOSTS : options.wx ? WX_HOSTS : options.oppo ? OPPO_HOSTS :
-      options.vivo ? VIVO_HOSTS : API_HOSTS;
+    const hosts = options.qq ? QQ_HOSTS : options.wx ? WX_HOSTS : options.oppo ? OPPO_HOSTS : API_HOSTS;
     const timeout = options.timeout || 20000;
     parseURL(url, hosts, stage);
     const started = performance.now();
+    const diagnostic = requestDiagnostic(a, stage, url, options.body === undefined ? 'GET' : 'POST', 'GM_XHR');
     return new Promise((resolve, reject) => {
       let settled = false, handle;
       const finish = (error, response) => {
@@ -1994,9 +1054,9 @@
           assert(response.status >= 200 && response.status < 300, 'HTTP_' + response.status, stage);
           const length = options.binary ? response.response?.byteLength : response.responseText?.length;
           assert(Number.isFinite(length) && length <= (options.limit || 1048576), 'RESPONSE_TOO_LARGE', stage);
-          if (options.qq || options.oppo || options.wx) a.cookies.read(response.responseHeaders || '', finalURL);
-          finish(null, response);
-        } catch (error) { finish(error, response); return; }
+          if (options.qq || options.oppo) a.cookies.read(response.responseHeaders || '', finalURL);
+          diagnostic('onload', response); finish(null, response);
+        } catch (error) { diagnostic('onload', response, error); finish(error, response); return; }
       };
       try {
         handle = GM_xmlhttpRequest({
@@ -2004,25 +1064,23 @@
           // Do not set anonymous/redirect/fetch: they force fetch mode in Chrome
           // and can hide Set-Cookie. Native XHR follows the official HTTPS chain.
           timeout, nocache: true,
-          ...(options.form && !options.vivo && !options.bili ? {anonymous: true} : {}),
-          ...(options.vivo ? {anonymous: false} : {}),
+          ...(options.wx || options.form ? {anonymous: true} : {}),
           ...(options.binary ? {responseType: 'arraybuffer'} : {}),
-          ...(options.qq || options.oppo || options.wx ? {cookie: a.cookies.header(url)} : {}),
+          ...(options.qq || options.oppo ? {cookie: a.cookies.header(url)} : {}),
           headers: options.qq ? {'User-Agent': UA, 'Accept': '*/*',
             ...(a.loginURL ? {Referer: a.loginURL} : {})} : options.wx ?
-            {'User-Agent': WX_UA, 'Accept': '*/*', ...(a.wxReferer ? {Referer: a.wxReferer} : {})} : options.oppo ? options.headers :
+            {'User-Agent': WX_UA, 'Accept': '*/*'} : options.oppo ? options.headers :
             {'Accept': 'application/json',
-              'Content-Type': options.form ? 'application/x-www-form-urlencoded' : 'application/json',
-              ...(options.headers || {})},
+              'Content-Type': options.form ? 'application/x-www-form-urlencoded' : 'application/json'},
           data: options.body === undefined ? undefined : options.form ? new URLSearchParams(options.body).toString() : JSON.stringify(options.body),
           onload: received,
-          onerror: r => { const e = failure('NETWORK_ERROR', stage); finish(e, r); },
-          ontimeout: r => { const e = failure('REQUEST_TIMEOUT', stage); finish(e, r); },
-          onabort: r => { const e = failure('REQUEST_CANCELLED', stage); finish(e, r); }
+          onerror: r => { const e = failure('NETWORK_ERROR', stage); diagnostic('onerror', r, e); finish(e, r); },
+          ontimeout: r => { const e = failure('REQUEST_TIMEOUT', stage); diagnostic('ontimeout', r, e); finish(e, r); },
+          onabort: r => { const e = failure('REQUEST_CANCELLED', stage); diagnostic('onabort', r, e); finish(e, r); }
         });
       } catch (cause) {
         const error = failure('GM_REQUEST_UNAVAILABLE', stage);
-        finish(error);
+        diagnostic('throw', {message: cause?.message}, error); finish(error);
       }
     });
   }
@@ -2113,6 +1171,7 @@
     a.stage = 'waiting_scan';
   }
   async function waitForQQ(a) {
+    prefetchEntryArtwork(a);
     while (!a.redirect) {
       active(a);
       a.stage = 'qq_poll';
@@ -2130,7 +1189,7 @@
       if (code === 0) { a.redirect = args[2]; a.expires = Date.now() + 600000; return; }
       assert(code === 66 || code === 67, code === 65 ? 'QQ_QR_EXPIRED' : 'QQ_REJECTED_' + code, a.stage);
       a.stage = code === 67 ? 'waiting_confirmation' : 'waiting_scan';
-      await sleep(3100);
+      await sleep(code === 67 ? 1000 : 3100);
     }
   }
   // Tencent app QR page verified 2026-09-21 with the APK's AppID/package.
@@ -2164,7 +1223,6 @@
   }
   async function prepareWX(a) {
     a.stage = 'wx_authorize';
-    a.wxReferer = 'https://open.weixin.qq.com/';
     const r = await transport(a, queryURL('https://open.weixin.qq.com/connect/app/qrconnect', {
       appid: WX_APP, bundleid: 'com.tencent.yoka.newsgs', scope: 'snsapi_userinfo', state: a.state
     }), {wx: true});
@@ -2185,10 +1243,10 @@
     a.wxUUID = uuid;
     a.image = URL.createObjectURL(new Blob([bytes], {type: png ? 'image/png' : 'image/jpeg'}));
     ui.screen.alt = '以微信登录 WeGame'; ui.screen.src = a.image; ui.screen.hidden = false;
-    setBrowserNotice(a, '请使用微信扫描二维码');
     a.stage = 'waiting_scan';
   }
   async function waitForWX(a) {
+    prefetchEntryArtwork(a);
     while (!a.wxCode) {
       active(a); a.stage = 'wx_poll';
       let r;
@@ -2202,15 +1260,11 @@
       }
       const p = wxPollResult(r.responseText), code = p.wx_errcode;
       if (code === 405) {
-        setBrowserNotice(a, '微信已确认，正在兑换 WeGame 登录票据…');
         a.wxCode = wxCallback(a, p.wx_redirecturl);
-        a.expires = Date.now() + 600000;
-        a.cookies.clear(); a.wxUUID = ''; a.wxReferer = '';
-        hideQR(a); return;
+        a.expires = Date.now() + 600000; hideQR(a); return;
       }
       assert(code === 404 || code === 408, code === 402 ? 'WX_QR_EXPIRED' : 'WX_REJECTED_' + code, a.stage);
       a.stage = code === 404 ? 'waiting_confirmation' : 'waiting_scan';
-      setBrowserNotice(a, code === 404 ? '已扫码，请在手机微信中确认登录' : '请使用微信扫描二维码');
       await sleep(code === 404 ? 1000 : 2000);
     }
   }
@@ -2272,6 +1326,7 @@
     const stage = options.stage || 'xiaomi_qr';
     a.stage = stage;
     const started = performance.now();
+    const diagnostic = requestDiagnostic(a, stage, url, options.body === undefined ? 'GET' : 'POST', 'GM_MANUAL_ANONYMOUS');
     return new Promise((resolve, reject) => {
       let done = false, handle;
       const finish = (error, result) => {
@@ -2308,16 +1363,16 @@
                   'RESPONSE_TOO_LARGE', stage);
               }
               a.cookies.read(r.responseHeaders || '', url);
-              finish(null, r);
-            } catch (error) { finish(error, r); }
+              diagnostic('onload', r); finish(null, r);
+            } catch (error) { diagnostic('onload', r, error); finish(error, r); }
           },
-          onerror: r => { const e = failure('NETWORK_ERROR', stage); finish(e, r); },
-          ontimeout: r => { const e = failure('REQUEST_TIMEOUT', stage); finish(e, r); },
-          onabort: r => { const e = failure('REQUEST_CANCELLED', stage); finish(e, r); }
+          onerror: r => { const e = failure('NETWORK_ERROR', stage); diagnostic('onerror', r, e); finish(e, r); },
+          ontimeout: r => { const e = failure('REQUEST_TIMEOUT', stage); diagnostic('ontimeout', r, e); finish(e, r); },
+          onabort: r => { const e = failure('REQUEST_CANCELLED', stage); diagnostic('onabort', r, e); finish(e, r); }
         });
       } catch (cause) {
         const error = failure('GM_REQUEST_UNAVAILABLE', stage);
-        finish(error);
+        diagnostic('throw', {message: cause?.message}, error); finish(error);
       }
     });
   }
@@ -2431,42 +1486,6 @@
     }
     throw failure('REDIRECT_LIMIT', 'xiaomi_oauth');
   }
-  async function waitForXiaomiPage(a) {
-    const stage = 'xiaomi_browser_login';
-    const nonce = String(a.browserNonce || '');
-    const state = String(a.state || '');
-    assert(/^[a-f0-9]{16,64}$/.test(nonce), 'XIAOMI_BROWSER_NONCE_MISSING', stage);
-    assert(/^[a-f0-9]{32}$/.test(state), 'XIAOMI_STATE_INVALID', stage);
-    const key = XIAOMI_PAGE_RESULT_KEY + nonce;
-    const deadline = Date.now() + 10 * 60 * 1000;
-    setBrowserNotice(a, '请在小米官方登录窗口使用账号密码、短信验证码或扫码完成登录，完成后会自动继续');
-    while (Date.now() < deadline) {
-      active(a);
-      let value = null;
-      try { value = GM_getValue(key, null); } catch (_) {}
-      if (value) {
-        try { GM_deleteValue(key); } catch (_) {}
-        assert(value.v === 1 && value.nonce === nonce, 'XIAOMI_PAGE_RESULT_INVALID', stage);
-        const createdAt = Number(value.createdAt), expires = Number(value.expires);
-        assert(Number.isFinite(createdAt) && Number.isFinite(expires) &&
-          expires > Date.now() && Date.now() - createdAt <= 120000, 'XIAOMI_PAGE_RESULT_EXPIRED', stage);
-        assert(typeof value.state === 'string' && value.state === state, 'XIAOMI_STATE_MISMATCH', stage);
-        let href;
-        try { href = new URL(String(value.href)); } catch (_) { throw failure('XIAOMI_PAGE_ORIGIN_MISMATCH', stage); }
-        assert((href.protocol === 'http:' || href.protocol === 'https:') &&
-          href.hostname === 'game.xiaomi.com' && href.pathname === '/oauthcallback/mioauth' &&
-          !href.port && !href.username && !href.password, 'XIAOMI_PAGE_ORIGIN_MISMATCH', stage);
-        const code = typeof value.code === 'string' ? value.code : '';
-        assert(code.length > 0 && code.length <= 4096 && !/[&=\r\n\x00]/.test(code),
-          'XIAOMI_PAGE_RESULT_INVALID', stage);
-        setBrowserNotice(a, '小米官方登录结果已收到，正在兑换游戏账号…');
-        a.stage = 'xiaomi_sdk';
-        return code;
-      }
-      await sleep(500);
-    }
-    throw failure('XIAOMI_BROWSER_TIMEOUT', stage);
-  }
   async function xiaomiCipher(value, decrypt = false) {
     // SDK AESEncryption: AES-128-ECB + PKCS#7, public shipped protocol key.
     // WebCrypto exposes CBC. Its first block with a zero IV is ECB; an extra
@@ -2520,14 +1539,11 @@
       username: typeof value.nickName === 'string' ? value.nickName.slice(0, 128) : ''};
   }
   async function exchangeXiaomi(a) {
-    if (!a.xiaomi && !a.session) {
+    if (!a.xiaomi) {
       if (!a.xiaomiOAuth) {
         if (!a.xiaomiCode) {
-          if (a.mode === 'browser') a.xiaomiCode = await waitForXiaomiPage(a);
-          else {
-            if (!a.xiaomiChallenge && !a.xiaomiLocation) await prepareXiaomi(a);
-            await waitForXiaomi(a);
-          }
+          if (!a.xiaomiChallenge && !a.xiaomiLocation) await prepareXiaomi(a);
+          await waitForXiaomi(a);
         }
         const v = success(await xiaomiSDK(a, '/misdk/v2/oauth',
           // ViewLoginLayout.WebLoginListenerImpl sends type 4 to the SDK;
@@ -2540,9 +1556,9 @@
         delete a.xiaomiCode; a.cookies.clear();
       }
       const plain = 'fuid=' + a.xiaomiOAuth.uuid + '&devAppId=' + XIAOMI_GAME_APP + '&toke=' + a.xiaomiOAuth.st +
-        '&imei=&sdkVersion=SDK_MI_SP_3.3.0.6&channel=meng_1439_345_android&ua=Windows' +
-        '&currentChannel=meng_1439_345_android' +
-        '&imeiMd5=&firstChannel=meng_1439_345_android&oaid=&needRealNameInfo=false&needServiceToken=true&needRiskControl=true';
+        '&imei=&sdkVersion=SDK_MI_SP_3.3.0.6&channel=meng_1660_99_android&ua=' +
+        encodeURIComponent(navigator.userAgent || 'web') + '&currentChannel=meng_1660_99_android' +
+        '&imeiMd5=&firstChannel=meng_1660_99_android&oaid=&needRealNameInfo=0&needServiceToken=1&needRiskControl=1';
       a.xiaomi = xiaomiGameCredentials(await xiaomiSDK(a, '/migc-sdk-account/getLoginAppAccount_v2', plain, true));
       delete a.xiaomiOAuth;
     }
@@ -2551,7 +1567,7 @@
       // 10038. Verified against AnySDK with the owned native session 2026-09-29.
       const r = success(await json(a, 'sgs_session', 'https://anysdk.dobest.cn/v1/login', {
         appid: '485', channel: '', package_id: '117', platform_id: '10038', platform_name: 'xiaomi',
-        base: {group_id: '0', device_id: a.device, version_code: '347', version_name: '1.0.347',
+        base: {group_id: '0', device_id: a.device, version_code: '343', version_name: '1.0.343',
           device_mobile: '', device_network: '', device_os: 'android', device_os_version: '', device_pixel: '', device_type: '1', device_version_code: ''},
         ext: JSON.stringify({session_type: 'st_dummy'}),
         data: {thirdparty: 'xiaomi', pid: '10038', gid: '485', uid: a.xiaomi.uid, username: a.xiaomi.username,
@@ -2747,87 +1763,6 @@
     }
     throw failure('REDIRECT_LIMIT', 'vivo_authorize');
   }
-  async function waitForVivoBrowser(a) {
-    const deadline = Date.now() + 10 * 60 * 1000;
-    a.stage = 'vivo_browser_login';
-    while (Date.now() < deadline) {
-      active(a);
-      let value;
-      try {
-        value = await vivoBrowserValue(a, '/h5/union/get', {gamePackage: VIVO_PACKAGE});
-      } catch (error) {
-        if (['NETWORK_ERROR', 'REQUEST_TIMEOUT', 'HTTP_502', 'HTTP_503', 'HTTP_504'].includes(error.message)) {
-          await sleep(2000);
-          continue;
-        }
-        throw error;
-      }
-      const code = Number(value.code);
-      if (code === 0) {
-        a.stage = 'vivo_account';
-        return value;
-      }
-      if ([30101, 30103, 50100, 50200, 50101].includes(code) || value.authPending) {
-        a.stage = 'vivo_browser_login';
-        await sleep(2000);
-        continue;
-      }
-      if (code === 601 || code === 602) throw failure('VIVO_REAL_NAME_REQUIRED', 'vivo_account');
-      throw failure('OFFICIAL_REJECTED_' + (Number.isInteger(code) ? code : 'UNKNOWN'), 'vivo_account');
-    }
-    throw failure('VIVO_BROWSER_TIMEOUT', 'vivo_browser_login');
-  }
-  async function waitForVivoPage(a) {
-    const stage = 'vivo_browser_login';
-    const nonce = String(a.browserNonce || '');
-    assert(/^[a-f0-9]{16,64}$/.test(nonce), 'VIVO_BROWSER_NONCE_MISSING', stage);
-    const key = VIVO_PAGE_RESULT_KEY + nonce;
-    const stateKey = VIVO_PAGE_STATE_PREFIX + nonce;
-    const deadline = Date.now() + 10 * 60 * 1000;
-    let lastNotice = '';
-    const noticeFor = phase => ({
-      passport_loaded: 'Vivo 官方登录页已打开，请完成密码、短信验证码或扫码登录',
-      bridge_loaded: 'Vivo 官方登录页已连接，请继续完成登录；完成后会自动继续',
-      waiting_auth_cookie: '等待 Vivo 官方登录页返回登录态…',
-      cookies_missing: 'Vivo 官方登录页尚未返回登录态，请确认已完成登录',
-      waiting_official_login: '已连接 Vivo 官方登录页，等待你完成登录…',
-      official_login_called: 'Vivo 官方页面已确认登录，正在读取一次性结果…',
-      result_sent: 'Vivo 登录结果已收到，正在兑换游戏账号…'
-    })[phase] || '';
-    setBrowserNotice(a, '请在 Vivo 官方登录窗口完成登录，完成后会自动继续');
-    while (Date.now() < deadline) {
-      active(a);
-      let state = null;
-      try { state = GM_getValue(stateKey, null); } catch (_) {}
-      if (state && state.nonce === nonce && Number(state.expires) > Date.now()) {
-        const notice = noticeFor(state.phase);
-        if (notice && notice !== lastNotice) { lastNotice = notice; setBrowserNotice(a, notice); }
-      }
-      let value = null;
-      try { value = GM_getValue(key, null); } catch (_) {}
-      if (value) {
-        try { GM_deleteValue(key); } catch (_) {}
-        assert(value.v === 1 && value.nonce === nonce, 'VIVO_PAGE_RESULT_INVALID', stage);
-        const createdAt = Number(value.createdAt), expires = Number(value.expires);
-        assert(Number.isFinite(createdAt) && Number.isFinite(expires) &&
-          expires > Date.now() && Date.now() - createdAt <= 120000, 'VIVO_PAGE_RESULT_EXPIRED', stage);
-        let href;
-        try { href = new URL(String(value.href)); } catch (_) { throw failure('VIVO_PAGE_ORIGIN_MISMATCH', stage); }
-        assert(href.protocol === 'https:' && href.hostname === 'joint.vivo.com.cn' &&
-          href.pathname.startsWith('/game-subaccount-login/'), 'VIVO_PAGE_ORIGIN_MISMATCH', stage);
-        const subOpenId = String(value.subOpenId || ''), openToken = String(value.openToken || '');
-        assert(/^[A-Za-z0-9+/=_.~-]{1,2048}$/.test(subOpenId), 'VIVO_PAGE_RESULT_INVALID', stage);
-        assert(/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(openToken), 'VIVO_PAGE_RESULT_INVALID', stage);
-        const openId = typeof value.openId === 'string' ? value.openId.slice(0, 1024) : '';
-        try { GM_deleteValue(stateKey); } catch (_) {}
-        setBrowserNotice(a, 'Vivo 官方登录结果已收到，正在兑换游戏账号…');
-        a.stage = 'vivo_account';
-        return {subOpenId, openToken, openId};
-      }
-      await sleep(500);
-    }
-    throw failure('VIVO_BROWSER_TIMEOUT', stage);
-  }
   async function vivoUnion(a, path, values, post = false, encrypted = true) {
     const cipher = vivoCipher.unionCipher();
     const params = encrypted ? {jvq_param: await cipher.encrypt(new URLSearchParams(values).toString())} : values;
@@ -2842,77 +1777,40 @@
     }
     active(a); return success(value, 'vivo_account');
   }
-  async function vivoBrowserValue(a, path, values, post = false, encrypted = true) {
-    const cipher = vivoCipher.unionCipher();
-    const params = encrypted ? {jvq_param: await cipher.encrypt(new URLSearchParams(values).toString())} : values;
-    const url = 'https://joint.vivo.com.cn' + path;
-    const r = await transport(a, post ? url : url + '?' + new URLSearchParams(params), {
-      vivo: true, form: post, body: post ? params : undefined, stage: 'vivo_account',
-      timeout: 35000, limit: 262144,
-      headers: {Accept: 'application/json, text/plain, */*',
-        Referer: 'https://joint.vivo.com.cn/game-subaccount-login/?from=login'}
-    });
-    if (r.status !== 200) throw failure('HTTP_' + r.status, 'vivo_account');
-    let value;
-    try { value = JSON.parse(r.responseText); }
-    catch (_) {
-      try { value = JSON.parse(await cipher.decrypt(r.responseText)); }
-      catch (_) {
-        // A logged-out GM request can follow the official authorize redirect
-        // back to the passport HTML page. Treat that as "still waiting", never
-        // as a credential or a successful account response.
-        if (/passport\.vivo\.com\.cn|\/v3\/web\/login\/authorize|<html/i.test(r.responseText || '')) {
-          return {code: 30101, authPending: true};
-        }
-        throw failure('VIVO_CIPHER_INVALID', 'vivo_account');
-      }
-    }
-    active(a);
-    assert(value && typeof value === 'object' && Object.hasOwn(value, 'code'),
-      'RESPONSE_SCHEMA_CHANGED', 'vivo_account');
-    if (Number.isFinite(Number(value.code))) value.code = Number(value.code);
-    return value;
-  }
-  async function vivoBrowser(a, path, values, post = false, encrypted = true) {
-    return success(await vivoBrowserValue(a, path, values, post, encrypted), 'vivo_account');
-  }
   function vivoAccountChoice(value, realName) {
     const stage = 'vivo_account';
     assert(realName.data?.accountRealName === true, 'VIVO_REAL_NAME_REQUIRED', stage);
     assert(!value.extraData?.minor && !value.extraData?.forceNative, 'VIVO_NATIVE_CONFIRMATION_REQUIRED', stage);
     const accounts = value.data?.subAccounts;
+    // 多账号诊断（作者 10-21 vivo 玩家反馈）：只记个数、标记与字段名，不记任何账号标识
+    console.info('[统一登录器]', JSON.stringify({version: VERSION, stage: 'vivo_account_shape', realName: realName.data?.accountRealName === true,
+      minor: Boolean(value.extraData?.minor), forceNative: Boolean(value.extraData?.forceNative), subAccounts: Array.isArray(accounts) ? accounts.length : null,
+      lastLogin: Array.isArray(accounts) ? accounts.map(x => x?.lastLogin === true) : null, frozen: Array.isArray(accounts) ? accounts.map(x => Boolean(x?.frozenFlag)) : null,
+      fields: Array.isArray(accounts) && accounts[0] ? Object.keys(accounts[0]).sort() : null, dataKeys: Object.keys(value.data || {}).sort(), extraKeys: Object.keys(value.extraData || {}).sort()}));
     assert(Array.isArray(accounts) && accounts.length === 1 && accounts[0].lastLogin === true,
       'VIVO_ACCOUNT_SELECTION_REQUIRED', stage);
     assert(!accounts[0].frozenFlag, 'VIVO_ACCOUNT_UNAVAILABLE', stage);
     return fields(accounts[0], ['subOpenId'], stage).subOpenId;
   }
   async function exchangeVivo(a) {
-    if (!a.vivo && !a.session) {
-      if (a.mode === 'browser') {
-        const result = await waitForVivoPage(a);
-        a.vivo = {uid: result.subOpenId, session: result.openToken,
-          username: result.openId || result.subOpenId || ''};
-      } else {
-        const values = {gamePackage: VIVO_PACKAGE};
-        const accountRequest = (path, body, post = false, encrypted = true) =>
-          vivoUnion(a, path, body, post, encrypted);
-        if (!a.vivoConfirmed) {
-          if (!a.vivoQR || !a.image) await prepareVivo(a);
-          await waitForVivo(a);
-        }
-        if (!a.vivoAuthorized) await authorizeVivo(a);
-        const account = await accountRequest('/h5/union/get', values);
-        const realName = await accountRequest('/h5/account/realName', values, false, false);
-        const uid = vivoAccountChoice(account, realName);
-        const used = await accountRequest('/h5/union/use', {...values, subOpenId: uid,
-          ...(account.extraInfo ? {extraInfo: account.extraInfo} : {})}, true);
-        assert(!used.extraData?.minor && !used.extraData?.forceNative && !used.noticeData?.content && used.vipRecall !== 1,
-          'VIVO_NATIVE_CONFIRMATION_REQUIRED', 'vivo_account');
-        assert(typeof used.data === 'string' && used.data.length > 0 && used.data.length <= 4096,
-          'RESPONSE_SCHEMA_CHANGED', 'vivo_account');
-        a.vivo = {uid, session: used.data, username: String(account.data.nickName || '')};
-        a.cookies.clear(); delete a.vivoConfirmed; delete a.vivoAuthorized; delete a.vivoIdentity;
+    if (!a.vivo) {
+      if (!a.vivoConfirmed) {
+        if (!a.vivoQR || !a.image) await prepareVivo(a);
+        await waitForVivo(a);
       }
+      if (!a.vivoAuthorized) await authorizeVivo(a);
+      const values = {gamePackage: VIVO_PACKAGE};
+      const account = await vivoUnion(a, '/h5/union/get', values);
+      const realName = await vivoUnion(a, '/h5/account/realName', values, false, false);
+      const uid = vivoAccountChoice(account, realName);
+      const used = await vivoUnion(a, '/h5/union/use', {...values, subOpenId: uid,
+        ...(account.extraInfo ? {extraInfo: account.extraInfo} : {})}, true);
+      assert(!used.extraData?.minor && !used.extraData?.forceNative && !used.noticeData?.content && used.vipRecall !== 1,
+        'VIVO_NATIVE_CONFIRMATION_REQUIRED', 'vivo_account');
+      assert(typeof used.data === 'string' && used.data.length > 0 && used.data.length <= 4096,
+        'RESPONSE_SCHEMA_CHANGED', 'vivo_account');
+      a.vivo = {uid, session: used.data, username: String(account.data.nickName || '')};
+      a.cookies.clear(); delete a.vivoConfirmed; delete a.vivoAuthorized; delete a.vivoIdentity;
     }
     if (!a.session) {
       const r = success(await json(a, 'sgs_session', 'https://anysdk.dobest.cn/v1/login', {
@@ -3083,12 +1981,20 @@
       expires: Math.min(claims.exp * 1000, Date.now() + tokens.expires_in * 1000)};
   }
   async function authorizeHuawei(a) {
+    if (a.huawei?.webCallback) { await huaweiTokens(a, huaweiCode(a, a.huawei.webCallback)); return; } /* 网页登录：回调里的 code 直接换令牌 */
     if (!a.huawei?.qr) await prepareHuawei(a);
     const h = a.huawei;
     assert(!h.confirmationUsed, 'HUAWEI_CONFIRMATION_CONSUMED', 'huawei_auth');
     let result;
     for (;;) {
-      result = await huaweiRequest(a, 'huawei_poll', h.cfg.asyncURL, {qrToken: h.qr.qrToken});
+      try {
+        result = await huaweiRequest(a, 'huawei_poll', h.cfg.asyncURL, {qrToken: h.qr.qrToken});
+      } catch (error) {
+        // A long-poll that times out before the user scans is expected, not a
+        // failure; re-issue it until the attempt itself expires (active()).
+        if (error.message !== 'REQUEST_TIMEOUT') throw error;
+        active(a); continue;
+      }
       const code = String(result.resultCode);
       if (code === '0') break;
       assert(['103000200', '103000202'].includes(code), code === '103000201' ? 'QR_EXPIRED' : 'HUAWEI_QR_REJECTED', 'huawei_poll');
@@ -3117,18 +2023,20 @@
       r = await huaweiRequest(a, 'huawei_authorize', HUAWEI_AUTH + '/oauth2/ajax/authorizeConfirm',
         {...sig, ...(h.cVersion ? {cVersion: h.cVersion} : {}), authorize_scope: Object.keys(scopes).join(' '), pageToken: h.si.pageToken});
     }
-    const code = huaweiCode(a, r.code);
+    await huaweiTokens(a, huaweiCode(a, r.code));
+  }
+  async function huaweiTokens(a, code) {
     const tokens = await huaweiRequest(a, 'huawei_token', HUAWEI_AUTH + '/oauth2/v3/token',
-      {grant_type: 'authorization_code', client_id: HUAWEI_APP, code, redirect_uri: HUAWEI_CALLBACK, code_verifier: h.verifier});
+      {grant_type: 'authorization_code', client_id: HUAWEI_APP, code, redirect_uri: HUAWEI_CALLBACK, code_verifier: a.huawei.verifier});
     const keys = await huaweiRequest(a, 'huawei_keys', 'https://oauth-login.cloud.huawei.com/oauth2/v3/certs');
     const auth = await huaweiIdentity(a, tokens, keys);
     a.cookies.clear(); a.huawei = {auth};
   }
   async function exchangeHuawei(a) {
     try {
-      if (!a.session && !a.huawei?.auth) await authorizeHuawei(a);
+      if (!a.huawei?.auth) await authorizeHuawei(a);
       const h = a.huawei;
-      if (!a.session) assert(h.auth.expires > Date.now(), 'SAVED_SESSION_EXPIRED', 'huawei_token');
+      assert(h.auth.expires > Date.now(), 'SAVED_SESSION_EXPIRED', 'huawei_token');
       if (!a.session) {
         // APK 1.0.347 SHA-256 5fee34555cdd23e19bf70d713a69a22db195e533cca03475996d1d4f771f79b5.
         // PlatformExecutor=newhuawei/332; TD_CONFIG_ID=376; TD_GROUP_ID absent.
@@ -3148,7 +2056,7 @@
         // Current hall.AppPlatform + UserSdkManager supply status=1 for Huawei.
         const r = success(await json(a, 'sgs_grant', queryURL('https://10th-sdk-login.sanguosha.com/huawei/app/login',
           {ticket: a.session, is_adult: '1'})), 'sgs_grant');
-        if (h?.gameUID) assert(String(r.data?.third_account_id) === h.gameUID, 'ACCOUNT_MISMATCH', 'sgs_grant');
+        assert(String(r.data?.third_account_id) === h.gameUID, 'ACCOUNT_MISMATCH', 'sgs_grant');
         const grant = validateGrant(r.data);
         assert(!a.account || a.account === grant.account, 'ACCOUNT_MISMATCH', 'sgs_grant');
         a.account = grant.account; a.grant = grant; a.grantExpires = Date.now() + 90000; remember(a);
@@ -3229,6 +2137,7 @@
     ui.oppoLink.href = h.qr.content; ui.oppoLink.textContent = h.qr.content; ui.oppoLink.hidden = false;
   }
   async function authorizeHonor(a) {
+    if (a.honor?.webCode) { await honorGameLogin(a, a.honor.webCode, ''); return; } /* 网页登录：回调 code 直接走游戏登录 */
     if (!a.honor?.qr) await prepareHonor(a);
     const h = a.honor; assert(!h.confirmationUsed, 'HONOR_CONFIRMATION_CONSUMED', 'honor_auth');
     let r;
@@ -3272,13 +2181,16 @@
     service = '';
     // Use the direct HTTPS token response, not unverified JWT contents.
     fields(token, ['open_id', 'code'], 'honor_token');
+    await honorGameLogin(a, token.code, token.open_id);
+  }
+  async function honorGameLogin(a, oauthCode, openId) {
     const result = await honorJSON(a, 'honor_game', HONOR_GAME + '/game/union/sdk/v1/aggregate/login',
-      {amsPackageName: 'com.hihonor.gameassistant.gameservice', appId: HONOR_APP, oauthCode: token.code,
+      {amsPackageName: 'com.hihonor.gameassistant.gameservice', appId: HONOR_APP, oauthCode,
         realNameAuthMode: 0, scene: 0, trackingStr: '', tInfo: {pName: 'com.yoka.sgs.x.honor',
           apkVer: 20014301, apkVerName: '2.0.14.301', language: 'zh-CN'}}, true);
     const login = result.loginData, data = login?.data, u = data?.unionToken;
     assert(login?.errorCode === 0, 'HONOR_GAME_REJECTED', 'honor_game');
-    assert(data?.appId === HONOR_APP && u?.openId === token.open_id, 'ACCOUNT_MISMATCH', 'honor_game');
+    assert(data?.appId === HONOR_APP && (!openId || u?.openId === openId), 'ACCOUNT_MISMATCH', 'honor_game'); /* 网页登录没有扫码链上的 open_id 可对 */
     assert(data.realInfo?.hasRealName === true && data.realInfo?.isAdult === true && !data.isChildAccount,
       'NATIVE_CONFIRMATION_REQUIRED', 'honor_game');
     fields(u, ['openId', 'token'], 'honor_game');
@@ -3388,7 +2300,6 @@
     ui.screen.alt = 'Steam 登录'; ui.screen.src = a.image; ui.screen.hidden = false;
   }
   function steamCheckpoint(a) {
-    if (EMBEDDED) return;
     // One owned attempt, 30-minute local diagnostic retention, private extension
     // storage. It is not a claim about Steam token lifetime. No QR is persisted.
     if (!a.steamWeb && !a.steam) return;
@@ -3397,15 +2308,15 @@
       steamWeb: a.steamWeb, steam: a.steam, cookies: [...a.cookies.items.entries()]});
   }
   function restoreSteamCheckpoint(a) {
-    if (EMBEDDED) return;
     const r = GM_getValue(STEAM_PENDING_KEY, null);
     if (!r) return;
     if (r.v !== 1 || !/^[a-f0-9]{32}$/.test(r.state) || !(r.expires > Date.now()) || r.expires > Date.now() + 1800000) {
       GM_deleteValue(STEAM_PENDING_KEY); return;
     }
-    if (r.steam) a.steam = validateSteamAuth(r.steam, !r.steam.steamID);
+    if (r.steam) a.steam = validateSteamAuth(r.steam);
     if (r.steamWeb) {
-      fields(r.steamWeb, ['refresh_token', 'steamID', 'sessionid'], 'steam_restore');
+      fields(r.steamWeb, ['refresh_token', 'steamID'], 'steam_restore');
+      assert((r.steamWeb.sessionid === '' && !r.steamWeb.finalized) || /^[a-f0-9]{24,64}$/.test(r.steamWeb.sessionid), 'STEAM_SESSION_COOKIE_UNAVAILABLE', 'steam_restore');
       assert(/^\d{17}$/.test(r.steamWeb.steamID), 'STEAM_ACCOUNT_INVALID', 'steam_restore');
       a.steamWeb = r.steamWeb;
     }
@@ -3418,50 +2329,15 @@
     }
     a.state = r.state; a.steamPendingUntil = r.expires; a.expires = r.expires;
   }
-  async function waitForSteamPage(a) {
-    const stage = 'steam_browser_login';
-    const nonce = String(a.browserNonce || '');
-    assert(/^[a-f0-9]{16,64}$/.test(nonce), 'STEAM_BROWSER_NONCE_MISSING', stage);
-    const key = STEAM_PAGE_RESULT_KEY + nonce;
-    const deadline = Date.now() + 10 * 60 * 1000;
-    setBrowserNotice(a, '请在 Steam 官方页面选择扫码、账号密码或 Steam Guard 登录');
-    while (Date.now() < deadline) {
-      active(a);
-      let value = null;
-      try { value = GM_getValue(key, null); } catch (_) {}
-      if (value) {
-        try { GM_deleteValue(key); } catch (_) {}
-        assert(value.v === 1 && value.nonce === nonce, 'STEAM_PAGE_RESULT_INVALID', stage);
-        const createdAt = Number(value.createdAt), expires = Number(value.expires);
-        assert(Number.isFinite(createdAt) && Number.isFinite(expires) &&
-          expires > Date.now() && Date.now() - createdAt <= 120000, 'STEAM_PAGE_RESULT_EXPIRED', stage);
-        assert(typeof value.state === 'string' && value.state === a.state, 'STEAM_STATE_MISMATCH', stage);
-        const access_token = String(value.access_token || '');
-        const steamID = String(value.steamid || '');
-        assert(/^[A-Za-z0-9._~+/=-]{8,16384}$/.test(access_token), 'STEAM_PAGE_RESULT_INVALID', stage);
-        assert(!steamID || /^\d{17}$/.test(steamID), 'STEAM_ACCOUNT_INVALID', stage);
-        const seconds = Number(value.expires_in) || 0;
-        assert(seconds >= 0 && seconds < 1e10, 'STEAM_TOKEN_SCHEMA_CHANGED', stage);
-        setBrowserNotice(a, 'Steam 官方登录结果已收到，正在兑换游戏账号…');
-        a.stage = 'steam_oauth';
-        return {access_token, steamID, expires: seconds ? Date.now() + seconds * 1000 : 0,
-          retainedUntil: Date.now() + 86400000};
-      }
-      await sleep(500);
-    }
-    throw failure('STEAM_BROWSER_TIMEOUT', stage);
-  }
   function steamJWTPayload(token) {
     const parts = String(token).split('.');
     assert(parts.length === 3 && parts[1].length < 16384, 'STEAM_TOKEN_SCHEMA_CHANGED', 'steam_poll');
     try { return JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))); }
     catch (_) { throw failure('STEAM_TOKEN_SCHEMA_CHANGED', 'steam_poll'); }
   }
-  function validateSteamAuth(value, allowMissingSteamID = false) {
-    const r = fields(value, ['access_token'], 'steam_auth');
-    r.steamID = typeof value?.steamID === 'string' ? value.steamID : '';
-    assert(allowMissingSteamID ? (!r.steamID || /^\d{17}$/.test(r.steamID)) : /^\d{17}$/.test(r.steamID),
-      'STEAM_ACCOUNT_INVALID', 'steam_auth');
+  function validateSteamAuth(value) {
+    const r = fields(value, ['access_token', 'steamID'], 'steam_auth');
+    assert(/^\d{17}$/.test(r.steamID), 'STEAM_ACCOUNT_INVALID', 'steam_auth');
     assert(Number.isFinite(value.retainedUntil) && value.retainedUntil > Date.now() && value.retainedUntil <= Date.now() + 86400000,
       'SAVED_SESSION_EXPIRED', 'steam_auth');
     const expires = Number(value.expires) || 0;
@@ -3513,8 +2389,8 @@
     } else assert(params.action === 'steam_openid_login', 'STEAM_OAUTH_FORM_SCHEMA_CHANGED', 'steam_oauth');
     return params;
   }
-  async function prepareSteam(a) {
-    // Verify redirect visibility BEFORE asking for the single user scan.
+  async function prepareSteamSession(a) {
+    // Community setup is deferred until after QR authorization; it is still mandatory.
     const initial = await steamRequest(a, 'steam_preflight', steamOAuthURL(a.state), undefined, true);
     const redirect = responseHeader(initial.responseHeaders, 'location');
     assert(redirect && initial.status >= 300, 'STEAM_REDIRECT_UNAVAILABLE', 'steam_preflight');
@@ -3540,24 +2416,46 @@
     }
     assert(sid && /^[a-f0-9]{24,64}$/.test(sid), 'STEAM_SESSION_COOKIE_UNAVAILABLE', 'steam_preflight');
     a.steamSessionID = sid;
-    a.steamChallenge = await steamAPI(a, 'BeginAuthSessionViaQR',
-      {device_details: {device_friendly_name: navigator.userAgent, platform_type: 2}, website_id: 'Community'}, 'steam_qr');
+  }
+  async function prepareSteam(a) {
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      active(a);
+      try {
+        a.steamChallenge = await steamAPI(a, 'BeginAuthSessionViaQR',
+          {device_details: {device_friendly_name: navigator.userAgent, platform_type: 2}, website_id: 'Community'}, 'steam_qr');
+        break;
+      } catch (error) {
+        active(a);
+        if (!['NETWORK_ERROR', 'REQUEST_TIMEOUT'].includes(error.message) || attempt === 4) throw error;
+        console.info('[统一登录器]', JSON.stringify({stage: 'steam_qr_retry', attempt, maxAttempts: 4, code: error.message}));
+        await sleep(attempt * 1000);
+      }
+    }
     fields(a.steamChallenge, ['client_id', 'request_id', 'challenge_url'], 'steam_qr');
     assert(/^\d+$/.test(a.steamChallenge.client_id) && Number(a.steamChallenge.interval) > 0 &&
       Number(a.steamChallenge.interval) <= 30, 'STEAM_QR_SCHEMA_CHANGED', 'steam_qr');
     renderSteamQR(a);
   }
   async function waitForSteam(a) {
+    prefetchEntryArtwork(a);
+    let transientFailures = 0;
     while (!a.steamWeb) {
       await sleep(Math.max(1000, Number(a.steamChallenge.interval) * 1000)); active(a);
-      const r = await steamAPI(a, 'PollAuthSessionStatus',
-        {client_id: a.steamChallenge.client_id, request_id: a.steamChallenge.request_id}, 'steam_poll');
+      let r;
+      try {
+        r = await steamAPI(a, 'PollAuthSessionStatus',
+          {client_id: a.steamChallenge.client_id, request_id: a.steamChallenge.request_id}, 'steam_poll');
+        transientFailures = 0;
+      } catch (error) {
+        if (['NETWORK_ERROR', 'REQUEST_TIMEOUT'].includes(error.message) && ++transientFailures <= 3 && Date.now() < a.expires) continue;
+        throw error;
+      }
       if (r.refresh_token) {
         const {refresh_token, access_token} = fields(r, ['refresh_token', 'access_token'], 'steam_poll');
         // Parsing is only for correlation; server verification remains mandatory.
         const token = steamJWTPayload(access_token);
         assert(/^\d{17}$/.test(token.sub) && Number(token.exp) * 1000 > Date.now(), 'STEAM_ACCOUNT_INVALID', 'steam_poll');
-        a.steamWeb = {refresh_token, steamID: token.sub, sessionid: a.steamSessionID};
+        a.steamWeb = {refresh_token, steamID: token.sub, sessionid: a.steamSessionID || ''};
         a.expires = Date.now() + 1800000;
         steamCheckpoint(a); hideQR(a); delete a.steamChallenge;
         return;
@@ -3572,6 +2470,11 @@
   }
   async function authorizeSteam(a) {
     const w = a.steamWeb;
+    if (!w.finalized && !w.sessionid) {
+      await prepareSteamSession(a);
+      w.sessionid = a.steamSessionID;
+      steamCheckpoint(a);
+    }
     if (!w.finalized) {
       const r = await steamRequest(a, 'steam_finalize', 'https://login.steampowered.com/jwt/finalizelogin',
         {nonce: w.refresh_token, sessionid: w.sessionid, redir: steamOAuthURL(a.state)});
@@ -3614,15 +2517,13 @@
     return {access_token, timestamp, sign: md5('access_token=' + access_token + '&timestamp=' + timestamp + '9YeFQW05TdB8JHjDsc1XiU6tOrm4xvk2')};
   }
   async function exchangeSteam(a) {
-    if (a.mode === 'browser' && !a.steam) {
-      a.steam = await waitForSteamPage(a);
-    } else if (!a.steam && !a.steamWeb) {
+    if (!a.steam && !a.steamWeb) {
       if (!a.steamChallenge) await prepareSteam(a);
       else if (!a.image) renderSteamQR(a);
       await waitForSteam(a);
     }
     if (!a.steam) await authorizeSteam(a);
-    a.steam = validateSteamAuth(a.steam, !a.steamWeb);
+    if (!a.steam.web) a.steam = validateSteamAuth(a.steam); /* 网页登录的令牌直接来自 Steam 回调，没有扫码那条链上的 steamID 可对 */
     if (!a.grant) {
       a.stage = 'steam_grant';
       const r = await transport(a, 'https://10th-ly-login.sanguosha.com/steam/oauth/login',
@@ -3634,8 +2535,7 @@
       const grant = validateSteamGrant(value.data);
       assert(!a.account || a.account === grant.account, 'ACCOUNT_MISMATCH', 'steam_grant');
       a.account = grant.account; a.grant = grant; a.grantExpires = Date.now() + 90000;
-      a.steam.retainedUntil = Date.now() + 86400000;
-      remember(a); if (!EMBEDDED) GM_deleteValue(STEAM_PENDING_KEY); delete a.steamWeb; a.cookies.clear();
+      remember(a); GM_deleteValue(STEAM_PENDING_KEY); delete a.steamWeb; a.cookies.clear();
     }
     return a.grant;
   }
@@ -3651,7 +2551,7 @@
   async function biliPost(a, stage, path, input) {
     a.stage = stage;
     const response = await transport(a, 'https://wpg-api.biligame.com' + path,
-      {form: true, bili: true, body: biliSigned(input, BILI_CONFIG.appKey), limit: 131072});
+      {form: true, body: biliSigned(input, BILI_CONFIG.appKey), limit: 131072});
     let r;
     try { r = JSON.parse(response.responseText); } catch (_) { throw failure('INVALID_JSON', stage); }
     assert(r && typeof r === 'object' && !Array.isArray(r) && Number.isInteger(r.code),
@@ -3687,6 +2587,7 @@
     a.stage = 'waiting_scan';
   }
   async function waitForBili(a) {
+    prefetchEntryArtwork(a);
     while (!a.bili) {
       active(a);
       let r;
@@ -3708,7 +2609,7 @@
       assert(r.code === 122022 || r.code === 122024,
         r.code === 122023 ? 'BILI_QR_EXPIRED' : 'OFFICIAL_REJECTED_' + r.code, 'bili_poll');
       a.stage = r.code === 122024 ? 'waiting_confirmation' : 'waiting_scan';
-      await sleep(2000);
+      await sleep(r.code === 122024 ? 1000 : 2000);
     }
   }
   async function exchangeBili(a) {
@@ -3843,12 +2744,9 @@
     // page, then run its 'identify' channel handshake — the iframe broadcasts
     // "identify$$channel_loaded$$", we answer "identify$$message_channel_port_passed$$"
     // with a MessageChannel port; result arrives as {type:'validate_success',ticket}.
-    active(a); a.stage = 'oppo_identify';
-    // The shell draws its own QR card above the page and only yields it while the
-    // projected stage matches /captcha|identify/. That projection is pushed on
-    // page mutations, and this widget changes neither the QR image nor the status
-    // text — so without this explicit nudge the card keeps covering the iframe and
-    // the user waits out the full timeout. Same for oppoCaptcha below.
+    active(a); a.stage = 'oppo_verify_prepare';
+    // Keep the current verification card visible until the official engine
+    // announces its channel. Merely starting the iframe is not UI readiness.
     page.__JND_UNIFIED_LOGIN?.notify?.();
     const url = OPPO_ID_ORIGIN + '/identify-engine-web?sceneId=' + OPPO_SCENE +
       '&bizAppKey=' + OPPO_BIZ + '&region=CN&processToken=' + encodeURIComponent(processToken);
@@ -3889,7 +2787,7 @@
           console.info('[统一登录器]', JSON.stringify({stage: 'oppo_identify_msg', origin: e.origin,
             kind: typeof e.data === 'string' ? 'str' : 'obj:' + String(e.data && e.data.type),
             length: text.length, matched: text === CH_LOADED}));
-          if (e.origin !== OPPO_ID_ORIGIN) return;
+          if (e.origin !== OPPO_ID_ORIGIN || e.source !== frame.contentWindow) return;
           if (e.data && e.data.type) { deliver(e.data); return; }
           // Deployed identify-engine-web prefixes the channel name with its
           // delegator tag (ie-index.js vh class, 2026-09-22).
@@ -3902,6 +2800,11 @@
             };
             frame.contentWindow.postMessage('[MessageChannelDelegator-name]: identify$$message_channel_port_passed$$',
               OPPO_ID_ORIGIN, [channel.port2]);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              if (attempt !== a || a.stage !== 'oppo_verify_prepare' || !overlay.isConnected) return;
+              a.stage = 'oppo_identify';
+              page.__JND_UNIFIED_LOGIN?.notify?.();
+            }));
           }
         };
         window.addEventListener('message', onMsg);
@@ -3921,7 +2824,7 @@
     // Server demanded human verification (check code 101001). Show the
     // official slide widget and return captchaCode in the official wrapped
     // form: JSON {success, provider:'DINGXIANG', result: JSON{ret,ticket}}.
-    active(a); a.stage = 'oppo_captcha';
+    active(a); a.stage = 'oppo_verify_prepare';
     page.__JND_UNIFIED_LOGIN?.notify?.();
     if (!page._dx?.Captcha) {
       await new Promise((resolve, reject) => {
@@ -3962,7 +2865,14 @@
           success: done(resolve), fail() {/* 滑块内部允许重试,等待 success */}});
         if (captcha && typeof captcha.on === 'function') {
           captcha.on('loadFail', () => done(reject)(failure('OPPO_CAPTCHA_LOADFAIL', 'oppo_captcha')));
-          captcha.on('ready', () => console.info('[统一登录器]', JSON.stringify({stage: 'oppo_captcha', event: 'ready'})));
+          captcha.on('ready', () => {
+            console.info('[统一登录器]', JSON.stringify({stage: 'oppo_captcha', event: 'ready'}));
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              if (attempt !== a || a.stage !== 'oppo_verify_prepare' || !overlay.isConnected) return;
+              a.stage = 'oppo_captcha';
+              page.__JND_UNIFIED_LOGIN?.notify?.();
+            }));
+          });
         }
       });
       assert(ticket !== undefined && String(ticket).length <= 4096, 'OPPO_CAPTCHA_SCHEMA_CHANGED', 'oppo_captcha');
@@ -4001,56 +2911,22 @@
       const data = oppoData(await oppoEnvelope(a, 'oppo_poll', OPPO_ORIGIN + '/identity/v1/authn/scan-code/check-qrcode',
         {qid: a.oppoQid}), 'oppo_poll');
       const status = data.qrCodeStatus;
-      if (status === 'CONFIRMED') { a.oppoConfirmed = true; hideQR(a); return; }
+      if (status === 'CONFIRMED') {
+        // Confirmation done. Captcha (2 min) and identify (5 min) only start now,
+        // so the 180 s attempt budget from start() would expire mid-verification
+        // and the expiry watcher would clear the attempt under the open widget.
+        a.oppoConfirmed = true; a.expires = Date.now() + 600000; hideQR(a); return;
+      }
       assert(status === 'INITIAL' || status === 'SCANNED',
         status === 'CANCELED_LOGIN' || status === 'CANCELED_AUTHORIZE' ? 'OPPO_QR_CANCELED' : 'OPPO_QR_STATUS_' + status, 'oppo_poll');
       a.stage = status === 'SCANNED' ? 'waiting_confirmation' : 'waiting_scan';
       await sleep(3000);
     }
   }
-  async function waitForOppoPage(a) {
-    const stage = 'oppo_browser_login';
-    const nonce = String(a.browserNonce || '');
-    assert(/^[a-f0-9]{16,64}$/.test(nonce), 'OPPO_BROWSER_NONCE_MISSING', stage);
-    const key = OPPO_PAGE_RESULT_KEY + nonce;
-    const deadline = Date.now() + 10 * 60 * 1000;
-    setBrowserNotice(a, '请在 OPPO 官方登录窗口完成手机号、密码、短信或扫码登录，完成后会自动继续');
-    while (Date.now() < deadline) {
-      active(a);
-      let value = null;
-      try { value = GM_getValue(key, null); } catch (_) {}
-      if (value) {
-        try { GM_deleteValue(key); } catch (_) {}
-        assert(value.v === 1 && value.nonce === nonce, 'OPPO_PAGE_RESULT_INVALID', stage);
-        const createdAt = Number(value.createdAt), expires = Number(value.expires);
-        assert(Number.isFinite(createdAt) && Number.isFinite(expires) &&
-          expires > Date.now() && Date.now() - createdAt <= 120000, 'OPPO_PAGE_RESULT_EXPIRED', stage);
-        let href;
-        try { href = new URL(String(value.href)); } catch (_) { throw failure('OPPO_PAGE_ORIGIN_MISMATCH', stage); }
-        assert(href.protocol === 'https:' && href.hostname === 'game-login.heytap.com' &&
-          href.pathname.startsWith('/game-union-h5/h5/client-login/'), 'OPPO_PAGE_ORIGIN_MISMATCH', stage);
-        const code = typeof value.code === 'string' ? value.code : '';
-        const ticket = typeof value.ticket === 'string' ? value.ticket : '';
-        assert(/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(code) ||
-          /^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(ticket), 'OPPO_PAGE_RESULT_INVALID', stage);
-        setBrowserNotice(a, 'OPPO 官方登录结果已收到，正在兑换游戏账号…');
-        a.stage = 'oppo_account';
-        return {code, ticket};
-      }
-      await sleep(500);
-    }
-    throw failure('OPPO_BROWSER_TIMEOUT', stage);
-  }
   async function exchangeOppo(a) {
-    if (!a.session && !a.oppo && !a.oppoAccount && !a.oppoCode && !a.oppoConfirmed) {
-      if (a.mode === 'browser') {
-        const result = await waitForOppoPage(a);
-        assert(result.code, 'OPPO_TICKET_EXCHANGE_UNAVAILABLE', 'oppo_browser_login');
-        a.oppoCode = result.code;
-      } else {
-        if (!a.oppoQid) await prepareOppo(a);
-        await waitForOppo(a);
-      }
+    if (!a.oppo && !a.oppoAccount && !a.oppoCode && !a.oppoConfirmed) {
+      if (!a.oppoQid) await prepareOppo(a);
+      await waitForOppo(a);
     }
     if (a.oppoConfirmed && !a.oppoCode) {
       // Web-side chain, official scan-login page flow (index-8a1f3023.js): the
@@ -4155,6 +3031,8 @@
   function oppoGameCredentials(value) {
     const stage = 'oppo_game_account';
     assert(value && String(value.code) === '200', 'OPPO_GAME_ACCOUNT_REJECTED', stage);
+    console.info('[统一登录器]', JSON.stringify({version: VERSION, stage: 'oppo_game_account_shape', gameAccounts: Array.isArray(value?.gameAccounts) ? value.gameAccounts.length : null,
+      fields: Array.isArray(value?.gameAccounts) && value.gameAccounts[0] ? Object.keys(value.gameAccounts[0]).sort() : null}));
     assert(Array.isArray(value.gameAccounts) && value.gameAccounts.length === 1,
       'OPPO_GAME_ACCOUNT_SELECTION_REQUIRED', stage);
     const game = value.gameAccounts[0];
@@ -4226,16 +3104,16 @@
     if (a.provider === 'steam') return exchangeSteam(a);
     if (a.provider === 'bilibili') return exchangeBili(a);
     if (a.provider === 'oppo') return exchangeOppo(a);
-    if (a.provider === 'wx' && !a.wegame && !a.wxCode && !a.session) {
+    if (a.provider === 'wx' && !a.wegame && !a.wxCode) {
       if (!a.wxUUID) await prepareWX(a);
       await waitForWX(a);
     }
-    if (a.provider !== 'wx' && !a.qq && !a.wegame && !a.session) {
+    if (a.provider !== 'wx' && !a.qq && !a.wegame) {
       if (!a.redirect) { if (!a.image) await prepare(a); await waitForQQ(a); }
       a.qq = await redeem(a);
       hideQR(a); a.cookies.clear(); a.qrsig = ''; a.redirect = '';
     }
-    if (!a.session && !a.wegame) {
+    if (!a.wegame) {
       if (!a.wegameResponse) a.wegameResponse = await json(a, 'wegame', 'https://m.wegame.com.cn/web/oauth2.0/union_login', {
         appid: CONFIG.wga_appid, app_key: CONFIG.wga_app_key, login_type: 'game_login',
         third_type: a.provider === 'wx' ? 1 : 0, login_state_type: a.provider === 'wx' ? 1 : 2,
@@ -4247,15 +3125,15 @@
         uid: String(r.pc_rail_id || r.openid), channel: String(r.channel_result || '00000000'),
         ...nativeSession(r)};
     }
+    if (a.wegame.atExpires && Date.now() >= a.wegame.atExpires) await refreshNative(a);
+    const wg = a.wegame;
+    if (!a.channel) {
+      const r = await json(a, 'channel', queryURL('https://m.wegame.com.cn/web/oauth2.0/get_channel_info', {
+        access_token: wg.access_token, channel: '00000000'
+      }));
+      a.channel = String(r.last_month_channel || wg.channel);
+    }
     if (!a.session) {
-      if (!a.wegame.access_token || (a.wegame.atExpires && Date.now() >= a.wegame.atExpires)) await refreshNative(a);
-      const wg = a.wegame;
-      if (!a.channel) {
-        const r = await json(a, 'channel', queryURL('https://m.wegame.com.cn/web/oauth2.0/get_channel_info', {
-          access_token: wg.access_token, channel: '00000000'
-        }));
-        a.channel = String(r.last_month_channel || wg.channel);
-      }
       const ext = {session_type: 'st_dummy', sessionId: 'hy_gameid', pfkey: 'pfKey',
         pf: (a.provider === 'wx' ? 'WeChat' : 'QQ') + '_m-' + a.channel + '-android-00000000-wegame_m_' + CONFIG.wga_appid + '_' + wg.uid,
         openid: wg.openid, openkey: wg.access_token};
@@ -4309,104 +3187,106 @@
     a.wegame = {...a.wegame, ...fields(r, ['access_token'], 'channel_restore'), ...auth};
     if (a.account) remember(a);
   }
-  function remembered(options = {}) {
-    return savedSession(options.provider || '', options.profileId || '', options.id || '');
+  function remembered() {
+    const r = GM_getValue(SESSION_KEY, null);
+    if (!r) return null;
+    try {
+      assert((r.v === 1 || r.v === 2) && ['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor'].includes(r.provider) &&
+        typeof r.id === 'string' &&
+        /^[a-f0-9]{32}$/.test(r.id), 'SAVED_SESSION_INVALID', 'restore');
+      assert(Number.isFinite(r.created) && r.created <= Date.now(), 'SAVED_SESSION_INVALID', 'restore');
+      if (r.provider === 'oppo') {
+        // Legacy sessions paired an account token with a fixed ID. Ignore
+        // them without deleting other stored state; require a fresh scan.
+        if (r.oppo?.credentialType !== 'game-ticket') return null;
+        const oppo = {...fields(r.oppo, ['token', 'ssoid'], 'restore'), credentialType: 'game-ticket'};
+        return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: 'oppo', created: r.created, oppo};
+      }
+      // Channel game sessions are restored like QQ/WX tokens: each refresh
+      // re-validates them with AnySDK; a rejection forgets them and rescans.
+      if (r.provider === 'xiaomi' || r.provider === 'vivo') {
+        const saved = r[r.provider];
+        const credential = {...fields(saved, ['uid', 'session'], 'restore'),
+          username: typeof saved.username === 'string' ? saved.username.slice(0, 128) : ''};
+        return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: r.provider, created: r.created,
+          [r.provider]: credential};
+      }
+      if (r.provider === 'huawei') {
+        const saved = r.huawei?.auth;
+        const auth = {...fields(saved, ['uid', 'session'], 'restore'),
+          username: typeof saved.username === 'string' ? saved.username.slice(0, 128) : '', expires: Number(saved.expires)};
+        assert(auth.expires > Date.now(), 'SAVED_SESSION_EXPIRED', 'restore');
+        return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: 'huawei', created: r.created,
+          huawei: {auth, gameUID: fields(r.huawei, ['gameUID'], 'restore').gameUID}};
+      }
+      if (r.provider === 'honor') {
+        const auth = {...fields(r.honor?.auth, ['uid', 'session'], 'restore'), expires: Number(r.honor.auth.expires) || 0};
+        assert(!auth.expires || auth.expires > Date.now(), 'SAVED_SESSION_EXPIRED', 'restore');
+        return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: 'honor', created: r.created, honor: {auth}};
+      }
+      if (r.provider === 'steam') {
+        return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: 'steam', created: r.created,
+          steam: validateSteamAuth(r.steam)};
+      }
+      if (r.provider === 'bilibili') {
+        const bili = validateBiliAuth(r.bili);
+        assert(bili.expires * 1000 > Date.now(), 'SAVED_SESSION_EXPIRED', 'restore');
+        return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: 'bilibili', created: r.created, bili};
+      }
+      const wg = fields(r.wegame, ['openid', 'access_token', 'uid', 'channel'], 'restore');
+      wg.ct = typeof r.wegame.ct === 'string' && r.wegame.ct.length <= 32768 ? r.wegame.ct : '';
+      wg.atExpires = Number(r.wegame.atExpires) || 0;
+      assert(Number.isFinite(wg.atExpires) && wg.atExpires >= 0 && wg.atExpires < 1e14,
+        'SAVED_SESSION_INVALID', 'restore');
+      // v1 discarded the server expiry/refresh token. Migrate without resetting
+      // its authorization: the SGS service still verifies that existing token.
+      if (wg.atExpires && Date.now() >= wg.atExpires && !wg.ct) throw failure('SAVED_SESSION_EXPIRED', 'restore');
+      return {...fields(r, ['id', 'account', 'device'], 'restore'), v: 2, provider: r.provider,
+        created: r.created, wegame: wg};
+    } catch (error) {
+      GM_deleteValue(SESSION_KEY);
+      lifecycle('session.forgotten', {...sessionFacts(r), reason: error?.message || 'SAVED_SESSION_INVALID'});
+      return null;
+    }
   }
   function remember(a) {
-    if (!a || (attempt && attempt !== a)) return false;
-    if (!a.savedId) { a.savedId = random(); a.created = Date.now(); }
+    const previous = GM_getValue(SESSION_KEY, null);
+    const fresh = !a.savedId;
+    if (fresh) { a.savedId = random(); a.created = Date.now(); }
     a.expires = Infinity; // QR deadline is not an authenticated session lifetime.
-    if (a.saveSession === false) return false;
-    const provider = a.provider || 'qq';
-    const profileId = sessionText(a.__sgsProfileId || a.profileId, 256);
-    if (!SESSION_PROVIDERS.has(provider) || !SESSION_PROFILE_PATTERN.test(profileId)) return false;
-    const record = sessionStoreRecord({v: 3, provider, profileId, id: a.savedId,
-      expires: SESSION_RECORD_EXPIRES_FOREVER, created: a.created || Date.now(), updated: Date.now(), account: a.account,
-      device: a.device, session: a.session, wegame: a.wegame, bili: a.bili,
-      steam: a.steam, oppo: a.oppo, xiaomi: a.xiaomi, vivo: a.vivo,
-      huawei: a.huawei, honor: a.honor});
-    // Provider payloads are retained only after the protocol-specific validation
-    // and only when the user opted into local session restoration.
-    if (!record || (provider === 'bilibili' && !record.bili) ||
-      (provider === 'steam' && !record.steam) || (provider === 'oppo' && !record.oppo)) return false;
-    try { GM_setValue(sessionStoreKey(profileId, provider), record); }
-    catch (_) { return false; }
-    delete a.qq; delete a.wxCode; delete a.wxUUID; delete a.wegameResponse;
-    return true;
-  }
-  function forgetSessions(profileId) {
-    const wanted = sessionText(profileId, 256);
-    if (!SESSION_PROFILE_PATTERN.test(wanted)) return 0;
-    let removed = 0;
-    for (const {key, record} of sessionRecords()) {
-      if (record.profileId !== wanted) continue;
-      try { GM_deleteValue(key); removed += 1; } catch (_) {}
+    if (previous?.id && previous.id !== a.savedId) {
+      lifecycle('session.overwritten', {...sessionFacts(previous), byProvider: a.provider || 'qq', byAccount: a.account ?? null});
     }
-    return removed;
+    const channelName = c => typeof c.username === 'string' ? c.username.slice(0, 128) : '';
+    const auth = a.provider === 'xiaomi' || a.provider === 'vivo' ? {[a.provider]: {
+        ...fields(a[a.provider], ['uid', 'session'], 'remember'), username: channelName(a[a.provider])}} :
+      a.provider === 'huawei' ? {huawei: {auth: {...fields(a.huawei.auth, ['uid', 'session'], 'remember'),
+        username: channelName(a.huawei.auth), expires: a.huawei.auth.expires}, gameUID: a.huawei.gameUID}} :
+      a.provider === 'honor' ? {honor: {auth: {...fields(a.honor.auth, ['uid', 'session'], 'remember'),
+        expires: a.honor.auth.expires || 0}}} :
+      a.provider === 'steam' ? {steam: validateSteamAuth(a.steam)} : a.provider === 'bilibili' ? {bili: validateBiliAuth(a.bili)} :
+      a.provider === 'oppo' ? {oppo: {...fields(a.oppo, ['token', 'ssoid'], 'remember'),
+        credentialType: a.oppo.credentialType}} :
+      {wegame: {...fields(a.wegame, ['openid', 'access_token', 'uid', 'channel'], 'remember'),
+        ct: a.wegame.ct || '', atExpires: a.wegame.atExpires || 0}};
+    GM_setValue(SESSION_KEY, {v: 2, provider: a.provider || 'qq', id: a.savedId, created: a.created,
+      account: a.account, device: a.device, ...auth});
+    const expiresAt = authExpiry(auth);
+    if (fresh || previous?.id !== a.savedId) lifecycle('session.saved', {...sessionFacts(a), expiresAt});
+    else if (authExpiry(previous) !== expiresAt) lifecycle('session.renewed', {...sessionFacts(a), expiresAt});
+    delete a.qq; delete a.wxCode; delete a.wxUUID; delete a.wegameResponse;
   }
-  function forget(a) {
-    if (a?.provider === 'steam') { try { GM_deleteValue(STEAM_PENDING_KEY); } catch (_) {} }
-    if (a?.savedId) {
-      for (const {key, record} of sessionRecords()) {
-        if (record.id !== a.savedId || (a.provider && record.provider !== a.provider)) continue;
-        try { GM_deleteValue(key); } catch (_) {}
-      }
-      try {
-        const legacy = GM_getValue(SESSION_KEY, null);
-        if (legacy?.id === a.savedId) GM_deleteValue(SESSION_KEY);
-      } catch (_) {}
+  function forget(a, reason = 'UNSPECIFIED') {
+    if (a?.provider === 'steam') GM_deleteValue(STEAM_PENDING_KEY);
+    const r = GM_getValue(SESSION_KEY, null);
+    if (a?.savedId && r?.id === a.savedId) {
+      GM_deleteValue(SESSION_KEY);
+      lifecycle('session.forgotten', {...sessionFacts(r), reason});
     }
     try { if (sessionStorage.getItem(TAB_KEY) === a?.savedId) sessionStorage.removeItem(TAB_KEY); } catch (_) {}
-    try { if (a?.savedId && GM_getValue(HANDOFF_KEY, null)?.id === a.savedId) GM_deleteValue(HANDOFF_KEY); } catch (_) {}
-    discardHandoff();
-  }
-  function bindProfile(profileId, clientToken = '', saveSession = true) {
-    const current = attempt;
-    if (!current || (clientToken && current.clientToken !== clientToken)) return false;
-    const cleaned = sessionText(profileId, 256);
-    if (!SESSION_PROFILE_PATTERN.test(cleaned)) return false;
-    current.__sgsProfileId = cleaned;
-    current.profileId = cleaned;
-    current.saveSession = saveSession !== false;
-    if (current.saveSession) remember(current);
-    return true;
-  }
-  function canReplaySavedAuth(a) {
-    if (!a || !a.provider) return false;
-    const now = Date.now();
-    if (a.provider === 'qq' || a.provider === 'wx') {
-      return !!(a.wegame && (a.wegame.access_token || a.wegame.ct));
-    }
-    if (a.provider === 'bilibili') {
-      return !!(a.bili?.access_key && Number(a.bili.expires) * 1000 > now);
-    }
-    if (a.provider === 'steam') {
-      return !!(a.steam?.access_token && Number(a.steam.retainedUntil) > now);
-    }
-    if (a.provider === 'oppo') return !!(a.oppo?.token && a.oppo?.ssoid);
-    if (a.provider === 'xiaomi' || a.provider === 'vivo') {
-      return !!a[a.provider]?.session;
-    }
-    if (a.provider === 'huawei') {
-      return !!(a[a.provider]?.auth?.session && Number(a[a.provider].auth.expires) > now);
-    }
-    if (a.provider === 'honor') {
-      const expires = Number(a.honor?.auth?.expires) || 0;
-      return !!(a.honor?.auth?.session && (!expires || expires > now));
-    }
-    return false;
-  }
-  function staleGrantRejected(error) {
-    return !!error && ['sgs_grant', 'bili_grant', 'steam_grant'].includes(error.stage) &&
-      /^(?:OFFICIAL_REJECTED_|SAVED_SESSION_EXPIRED)/.test(error.message || '');
-  }
-  function gameRouteForAttempt(a) {
-    const route = GAME_ROUTES[a?.provider || ''];
-    return route && location.pathname === route.path ? route : null;
+    if (a?.savedId && GM_getValue(HANDOFF_KEY, null)?.id === a.savedId) GM_deleteValue(HANDOFF_KEY);
   }
   function invalidateOnError(a, error) {
-    if (a && attempt && attempt !== a) return;
-    const clientToken = a?.clientToken || '';
     if (a && error.stage === 'channel_restore' && error.message === 'RESPONSE_SCHEMA_CHANGED') {
       // An unsupported renewal response is not proof of revoked credentials.
       // Keep the saved checkpoint until an explicit channel click replaces it;
@@ -4414,125 +3294,40 @@
       a.renewalFailed = true;
     }
     if (/^OFFICIAL_REJECTED_|ACCOUNT_MISMATCH|SAVED_SESSION_EXPIRED|BILI_CHANNEL_MISMATCH/.test(error.message)) {
-      // A rejected ticket is a re-authorization signal, not proof that the
-      // account itself should be removed. Keep both the account and the saved
-      // upstream credential available for a later explicit retry.
-      if (a) a.reauthRequired = true;
-      error.reauthRequired = true;
-      restoreMiddle(clientToken); clearAttempt(clientToken);
+      // A protocol rejection must not silently spend another Steam scan.
+      // Preserve the completed authorization checkpoint for explicit retry.
+      if (a?.provider === 'steam' && a.steamWeb && error.message !== 'ACCOUNT_MISMATCH') return;
+      forget(a, error.message); restoreMiddle(); clearAttempt();
     }
   }
-  function unlock(expectedToken = '') {
-    if (!releaseLock) return;
-    if (expectedToken && lockOwnerToken !== expectedToken) return;
-    const release = releaseLock;
-    releaseLock = null; lockOwnerToken = '';
-    release();
+  function unlock() {
+    if (releaseLock) { releaseLock(); releaseLock = null; }
   }
-  async function resume(options = {}) {
-    const provider = sessionText(options.provider, 32);
-    const profileId = sessionText(options.profileId, 256);
-    const required = options.required === true;
-    let saved = savedSession(provider, profileId);
-    if (!saved && profileId) {
-      saved = sessionRecords().map(item => item.record)
-        .filter(record => record.profileId === profileId)
-        .sort((left, right) => Number(right.updated || 0) - Number(left.updated || 0))[0] || null;
-    }
-    if (!saved && !provider && !profileId) saved = remembered();
-    if (!saved) {
-      if (required) throw failure('SAVED_SESSION_NOT_FOUND', 'restore');
-      return false;
-    }
-    try {
-      if (saved.provider === 'bilibili') {
-        saved.bili = validateBiliAuth(saved.bili);
-        assert(saved.bili.expires * 1000 > Date.now(), 'SAVED_SESSION_EXPIRED', 'restore');
-      } else if (saved.provider === 'steam') {
-        if (!(Number(saved.steam?.retainedUntil) > 0)) {
-          saved.steam = {...saved.steam, retainedUntil: Date.now() + 86400000};
-        }
-        saved.steam = validateSteamAuth(saved.steam, true);
-      } else if (saved.provider === 'oppo') {
-        assert(saved.oppo?.credentialType === 'game-ticket' && saved.oppo.token && saved.oppo.ssoid,
-          'SAVED_SESSION_INVALID', 'restore');
-      } else if (saved.provider === 'qq' || saved.provider === 'wx') {
-        assert(saved.session || saved.wegame?.access_token || saved.wegame?.ct, 'SAVED_SESSION_INVALID', 'restore');
-        if (!saved.session && saved.wegame?.atExpires && Date.now() >= saved.wegame.atExpires && !saved.wegame.ct) {
-          throw failure('SAVED_SESSION_EXPIRED', 'restore');
-        }
-      } else if (saved.provider === 'honor') {
-        assert(saved.session || saved.honor?.auth?.session, 'SAVED_SESSION_INVALID', 'restore');
-      } else {
-        assert(saved.session, 'SAVED_SESSION_INVALID', 'restore');
-      }
-    } catch (error) {
-      // Never discard the last recoverable record just because this attempt
-      // could not validate it. A stale record must remain available for an
-      // explicit re-authorization and for future automatic recovery.
-      if (required) throw error;
-      return false;
-    }
-    if (attempt) {
-      if (!required) return false;
-      const previousToken = attempt.clientToken || '';
-      restoreMiddle(previousToken);
-      clearAttempt(previousToken);
-    }
-    if (releaseLock) unlock(lockOwnerToken);
+  async function resume() {
+    const saved = remembered();
+    if (!saved) { lifecycle('restore.none'); return; }
+    if (busy) return;
+    const facts = sessionFacts(saved);
+    lifecycle('restore.begin', facts);
     busy = true; setProvidersBusy(true);
-    const clientToken = normalizeClientToken(options.clientToken || random());
-    const generation = ++runGeneration;
-    activeRunGeneration = generation;
     try {
-      await acquireLock(clientToken);
-      if (activeRunGeneration !== generation) { unlock(clientToken); return; }
+      await acquireLock();
       assert(!disposed, 'PAGE_CLOSED', 'restore');
-      attempt = {state: random(), provider: saved.provider, savedId: saved.id, created: saved.created, clientToken,
-        generation, mode: 'restore', restored: true, saveSession: options.saveSession !== false,
-        __sgsProfileId: profileId || saved.profileId, expires: Infinity, device: saved.device || random(),
-        account: saved.account, session: saved.session, wegame: saved.wegame, bili: saved.bili,
-        steam: saved.steam, oppo: saved.oppo, xiaomi: saved.xiaomi, vivo: saved.vivo,
-        huawei: saved.huawei, honor: saved.honor, stage: 'restore', cookies: new Cookies(), requests: new Set()};
-      let rebuilt = false;
-      // Prefer a still-valid saved SGS session. If only that session became
-      // stale, rebuild it once from the provider credential that is already
-      // stored locally. This applies to every supported provider, not WeGame
-      // alone, and is safe because the upstream credential is revalidated by
-      // the provider-specific exchange.
-      try {
-        await exchange(attempt);
-      } catch (error) {
-        if (!staleGrantRejected(error) || !canReplaySavedAuth(attempt)) throw error;
-        attempt.session = ''; attempt.grant = null; delete attempt.grantExpires;
-        attempt.stage = 'restore'; rebuilt = true;
-        await exchange(attempt);
-      }
-      if (rebuilt) remember(attempt);
-      // Account management can run on the game page itself. That page has no
-      // official login box, so a successful restore must navigate directly
-      // through the same one-time handoff used by the normal Enter button.
-      if (gameRouteForAttempt(attempt)) {
-        openGame(attempt);
-        return true;
-      }
-      await showMiddle(attempt);
-      return true;
+      attempt = {state: random(), provider: saved.provider, savedId: saved.id, created: saved.created,
+        expires: Infinity, device: saved.device, account: saved.account,
+        wegame: saved.wegame, bili: saved.bili, steam: saved.steam, oppo: saved.oppo,
+        xiaomi: saved.xiaomi, vivo: saved.vivo, huawei: saved.huawei, honor: saved.honor, stage: 'restore', cookies: new Cookies(), requests: new Set()};
+      // exchange renews expired tokens and validates live tokens with SGS.
+      await exchange(attempt); await showMiddle(attempt);
+      lifecycle('restore.ok', {...facts, ageMs: sessionAge(saved.created), expiresAt: authExpiry(attempt)});
     } catch (error) {
-      if (activeRunGeneration !== generation) return;
+      lifecycle('restore.fail', {...facts, code: error?.message || 'LOGIN_FLOW_FAILED', stage: error?.stage || 'restore'});
       invalidateOnError(attempt, error);
-      if (attempt?.clientToken === clientToken) clearAttempt(clientToken);
-      if (required) throw error;
-      if (!disposed) errorUI(error, clientToken);
-      return false;
-    } finally {
-      unlock(clientToken);
-      if (activeRunGeneration === generation) { busy = false; setProvidersBusy(false); }
-    }
+      if (!disposed) errorUI(error);
+    } finally { unlock(); busy = false; setProvidersBusy(false); }
   }
 
   function hideQR(a) {
-    if (a && attempt && attempt !== a) return;
     if (ui) { ui.screen.hidden = true; ui.screen.removeAttribute('src'); }
     if (ui?.oppoLink) { ui.oppoLink.hidden = true; ui.oppoLink.removeAttribute('href'); ui.oppoLink.textContent = ''; }
     if (a?.image) { URL.revokeObjectURL(a.image); a.image = ''; }
@@ -4540,107 +3335,42 @@
   function setProvidersBusy(value) {
     for (const key of ['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor']) if (ui?.[key]) ui[key].disabled = value;
   }
-  function clearAttempt(expectedToken = '') {
-    const a = attempt;
-    const ownedToken = a?.clientToken || '';
-    if (a && expectedToken && ownedToken !== expectedToken) return false;
-    attempt = null;
+  function clearAttempt() {
+    const a = attempt; attempt = null;
     if (a) {
       for (const cancel of [...a.requests]) cancel();
       hideQR(a); a.cookies.clear();
       for (const key of Object.keys(a)) delete a[key];
     }
-    unlock(expectedToken || ownedToken);
-    return !!a;
+    unlock();
   }
-  async function acquireLock(clientToken = '') {
+  async function acquireLock() {
     assert(navigator.locks?.request, 'WEB_LOCKS_UNAVAILABLE', 'setup');
-    // A released Web Lock is not immediately observable to the next
-    // ifAvailable request: the previous callback still has to unwind. Retry
-    // briefly so a user-initiated retry after cancel is not misreported as
-    // another tab's live login.
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const acquired = await new Promise((resolve, reject) => {
-        let granted = false;
-        navigator.locks.request('jnd-wegame-qq-login', {ifAvailable: true}, async lock => {
-          if (!lock) { resolve(false); return; }
-          granted = true;
-          lockOwnerToken = clientToken;
-          resolve(true);
-          await new Promise(release => { releaseLock = release; });
-        }).catch(error => {
-          if (granted) console.error('[统一登录器] Web Lock release failed', error);
-          else reject(failure('WEB_LOCK_FAILED', 'setup'));
-        });
-      });
-      if (acquired) return;
-      if (attempt < 9) await sleep(40);
-    }
-    throw failure('OTHER_TAB_ACTIVE', 'setup');
+    return new Promise((resolve, reject) => {
+      navigator.locks.request('jnd-wegame-qq-login', {ifAvailable: true}, async lock => {
+        if (!lock) { reject(failure('OTHER_TAB_ACTIVE', 'setup')); return; }
+        await new Promise(release => { releaseLock = release; resolve(); });
+      }).catch(() => reject(failure('WEB_LOCK_FAILED', 'setup')));
+    });
   }
-  function errorUI(error, clientToken = '') {
-    if (clientToken && attempt && attempt.clientToken !== clientToken) return;
-    const current = attempt;
-    const eventToken = clientToken || current?.clientToken || boundClientToken || '';
-    const provider = current?.provider || '';
+  function errorUI(error) {
     const code = /^[A-Z][A-Z_0-9-]*$/.test(error?.message || '') ? error.message : 'LOGIN_FLOW_FAILED';
-    const stage = /^[a-z_]+$/.test(error?.stage || '') ? error.stage : current?.stage || 'setup';
-    const reauthRequired = !!(error?.reauthRequired || current?.reauthRequired);
-    const recoverable = error?.recoverable === true;
-    const detail = {error: code, stage, version: VERSION,
-      ...(reauthRequired ? {reauthRequired: true} : {}),
-      ...(recoverable ? {recoverable: true} : {})};
-    microError = {code, stage, ...(reauthRequired ? {reauthRequired: true} : {}),
-      ...(recoverable ? {recoverable: true} : {})};
-    ui.output.textContent = JSON.stringify(detail, null, 2);
+    const stage = /^[a-z_]+$/.test(error?.stage || '') ? error.stage : attempt?.stage || 'setup';
+    const detail = {error: code, stage, version: VERSION};
+    microError = {code, stage};
+    lifecycle('error', {code, stage, provider: attempt?.provider || null});
+    const request = error.requestDiagnostic || (attempt?.provider === 'honor' ? attempt.requestDiagnostic : null);
+    if (request) detail.request = request;
+    ui.output.textContent = JSON.stringify(detail, null, request ? 2 : undefined);
     ui.menu.hidden = false; ui.handle.setAttribute('aria-expanded', 'true');
-    record(stage, performance.now(), 0, code);
-    emitDirectEvent({type: 'error', provider, code, stage, clientToken: eventToken,
-      reauthRequired, recoverable});
+    record(stage, performance.now(), request?.status || 0, code);
   }
-  function expireAttempt(expectedToken = '') {
-    const current = attempt;
-    if (!current || (expectedToken && current.clientToken !== expectedToken) ||
-      Date.now() < Number(current.expires || 0)) return false;
-    const clientToken = current.clientToken || '';
-    const error = failure('LOGIN_FLOW_EXPIRED', 'expiry');
-    error.recoverable = true;
-    if (!disposed) errorUI(error, clientToken);
-    // Expiry only invalidates this in-memory flow. The account and its saved
-    // upstream credential remain available for the next direct-login attempt.
-    restoreMiddle(clientToken);
-    clearAttempt(clientToken);
-    return true;
-  }
-  function cancelFlow(clientToken = '', reason = 'user') {
-    const current = attempt;
-    if (!current) return false;
-    const token = typeof clientToken === 'string' ? clientToken : '';
-    if (token && current.clientToken !== token) return false;
-    const provider = current.provider || '';
-    const eventToken = current.clientToken || token;
-    const cancelReason = ['user', 'popup_closed', 'superseded', 'cleanup'].includes(reason) ? reason : 'user';
-    microError = null;
-    restoreMiddle(eventToken);
-    clearAttempt(eventToken);
-    if (ui) ui.output.textContent = '';
-    // Internal cleanup must not overwrite the real error that just failed.
-    // Only an explicit user action or a closed login surface is a cancellation.
-    if (!['superseded', 'cleanup'].includes(cancelReason)) {
-      emitDirectEvent({type: 'cancel', provider, clientToken: eventToken, reason: cancelReason});
-    }
-    return true;
-  }
-  function restoreMiddle(expectedToken = '') {
-    if (!middle) return false;
-    if (expectedToken && middle.ownerToken && middle.ownerToken !== expectedToken) return false;
-    if (!expectedToken && attempt?.clientToken && middle.ownerToken &&
-      middle.ownerToken !== attempt.clientToken) return false;
+  function restoreMiddle() {
+    if (!middle) return;
     middle.node.remove(); middle.box.classList.remove('jnd-wg-active');
     for (const [node, display] of middle.hidden) node.style.display = display;
     middle.box.classList.toggle('login-box-unity', middle.wasUnity);
     middle = null;
-    return true;
   }
   async function entryDOM(a) {
     const read = () => {
@@ -4659,20 +3389,65 @@
       a.requests.add(cancel); observer.observe(document.documentElement, {childList: true, subtree: true});
     });
   }
-  async function showMiddle(a) {
-    active(a);
-    if (middle) {
-      if (middle.ownerToken === a.clientToken) return;
-      throw failure('ENTRY_UI_BUSY', 'entry_ui');
-    }
-    const result = success(await json(a, 'entry_config', 'https://web-login-api.sanguosha.com/v1_1/background/info'), 'entry_config');
+  async function fetchEntryArtwork(a) {
+    const stage = 'entry_config';
+    // Public artwork only. Keep the foreground scan stage unchanged.
+    const response = await transport(a, 'https://web-login-api.sanguosha.com/v1_1/background/info',
+      {stage, limit: 131072});
+    let value;
+    try { value = JSON.parse(response.responseText); } catch (_) { throw failure('INVALID_JSON', stage); }
+    assert(value && typeof value === 'object' && !Array.isArray(value), 'RESPONSE_SCHEMA_CHANGED', stage);
+    const result = success(value, stage);
     // Official /login/x/index uses MICRO_ENV_FLAG_10TH and only gameId 100.
     // 10th-client.0b24.js, checked 2026-09-21; SHA-256:
     // 8835472d253415c4e6b15c38083dd6a8e04737e11f13d76e685991cdc94ecc44.
     // Keep the official wide artwork and base 732px frame; do not stretch a
     // 273px tile from the three-entry page. Recheck config/DOM at runtime.
-    const image = fields(result.data?.['100client_game'], ['img', 'flag_img'], 'entry_config');
-    for (const value of Object.values(image)) parseURL(value, new Set(['wwwoss.sanguosha.com']), 'entry_config');
+    const image = fields(result.data?.['100client_game'], ['img', 'flag_img'], stage);
+    for (const value of Object.values(image)) parseURL(value, new Set(['wwwoss.sanguosha.com']), stage);
+    active(a);
+    return image;
+  }
+  function prefetchEntryImages(a, artwork) {
+    for (const url of new Set(Object.values(artwork))) {
+      active(a);
+      const image = new Image(), started = performance.now();
+      let settled = false;
+      const finish = code => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); a.requests.delete(cancel);
+        image.onload = image.onerror = null;
+        record('entry_image', started, 0, code);
+        if (code) image.removeAttribute('src');
+      };
+      const cancel = () => finish('REQUEST_CANCELLED');
+      const timer = setTimeout(() => finish('REQUEST_TIMEOUT'), 20000);
+      a.requests.add(cancel);
+      image.onload = () => finish();
+      image.onerror = () => finish('ENTRY_IMAGE_LOAD_FAILED');
+      // Same page and URLs as the final CSS backgrounds, so the browser can
+      // reuse its image cache. No extra DOM, substitute artwork or login delay.
+      image.src = url;
+    }
+  }
+  function prefetchEntryArtwork(a) {
+    // Scope to this attempt. Cancellation uses the same request registry.
+    // Consume speculative failures immediately; the required path retries once.
+    if (!a.entryArtwork) a.entryArtwork = fetchEntryArtwork(a).then(image => {
+      prefetchEntryImages(a, image);
+      return {image};
+    }).catch(() => ({image: null}));
+  }
+  async function entryArtwork(a) {
+    active(a); a.stage = 'entry_config';
+    const cached = a.entryArtwork ? await a.entryArtwork : null;
+    active(a);
+    return cached?.image || await fetchEntryArtwork(a);
+  }
+  async function showMiddle(a) {
+    active(a);
+    if (middle) return;
+    const image = await entryArtwork(a);
     // The official web nickname lookup accepts a CAS account name. There is
     // no verified pre-game UserID lookup for this channel; leave its slot empty.
     active(a);
@@ -4702,22 +3477,10 @@
     accountInfo.append(name, logout); row.append(accountInfo, enter); node.append(style, list, row);
     const hidden = [...box.querySelectorAll('#sgsPassApp,#toggleThirdLogin,#selectGame')].map(el => [el, el.style.display]);
     for (const [el] of hidden) el.style.display = 'none';
-    middle = {node, hidden, box, enter, ownerToken: a.clientToken,
-      wasUnity: box.classList.contains('login-box-unity')};
+    middle = {node, hidden, box, enter, wasUnity: box.classList.contains('login-box-unity')};
     box.classList.remove('login-box-unity');
     box.classList.add('jnd-wg-active'); box.append(node);
     a.stage = 'ready'; ui.output.textContent = '扫码成功';
-    let returnedProfileId = '';
-    try {
-      returnedProfileId = emitDirectEvent({
-        type: 'ready', provider: a.provider, account: a.account || '',
-        identityAccount: a.provider === 'xiaomi' ? (a.xiaomi?.uid || '') : '',
-        nickname: a.provider === 'xiaomi' ? (a.xiaomi?.username || '') : '', clientToken: a.clientToken
-      }) || '';
-    } catch (_) {}
-    const profileId = SESSION_PROFILE_PATTERN.test(returnedProfileId) ? returnedProfileId :
-      (SESSION_PROFILE_PATTERN.test(a.__sgsProfileId || a.profileId || '') ? (a.__sgsProfileId || a.profileId) : '');
-    if (profileId) bindProfile(profileId, a.clientToken, a.saveSession !== false);
   }
   // Presentation from https://login.dobest.cn/sdo/Logout/appLogout.php,
   // css/exit.css and images/{loading,bg}.png, checked 2026-09-21.
@@ -4763,31 +3526,30 @@
   }
   async function logoutAccount(a) {
     if (busy || disposed || attempt !== a) return;
-    const clientToken = a.clientToken || '';
     busy = true; ui.qq.disabled = true;
     try {
       // Revoke local restoration before any animation; closing/reloading this
       // page during the transition must not restore the logged-out account.
-      forget(a); clearAttempt(clientToken); ui.output.textContent = ''; ui.menu.hidden = true;
+      // Local only: no channel or SGS revocation endpoint is called.
+      lifecycle('logout', {...sessionFacts(a), serverRevoked: false});
+      forget(a, 'LOGOUT'); clearAttempt(); ui.output.textContent = ''; ui.menu.hidden = true;
       ui.handle.setAttribute('aria-expanded', 'false');
       await logoutTransition();
     } catch (error) {
       if (!disposed) errorUI(error);
     } finally {
-      if (!disposed) { restoreMiddle(clientToken); busy = false; ui.qq.disabled = false; }
+      if (!disposed) { restoreMiddle(); busy = false; ui.qq.disabled = false; }
     }
   }
 
   async function enterGame(a) {
-    if (busy || !a || !middle || middle.ownerToken !== a.clientToken) return;
+    if (busy) return;
     busy = true; middle.enter.disabled = true;
     let navigating = false;
     try {
       active(a); await acquireLock();
-      assert(a.savedId, 'SAVED_SESSION_INVALID', 'handoff');
-      // Only a restored attempt depends on the persistent session record. A
-      // fresh scan must remain enterable even when the save switch is off.
-      if (a.restored) assert(sessionForAttempt(a)?.id === a.savedId, 'SAVED_SESSION_EXPIRED', 'handoff');
+      const saved = remembered();
+      assert(saved?.id === a.savedId, 'SAVED_SESSION_EXPIRED', 'handoff');
       // A selection page may remain open longer than its initial game grant.
       if (!a.grant || Date.now() >= a.grantExpires) {
         delete a.grant; delete a.session; await exchange(a);
@@ -4806,95 +3568,172 @@
     const isSteam = a.provider === 'steam';
     const payload = isSteam ? {grant: validateSteamGrant(a.grant)} : isBili ?
       {bili: validateBiliAuth(a.bili), grant: validateBiliGrant(a.grant)} : {grant: validateGrant(a.grant)};
-    const savedProvider = a.provider || 'qq';
-    const route = GAME_ROUTES[savedProvider];
-    assert(route, 'PROVIDER_UNAVAILABLE', 'handoff');
-    const routeChannel = route.channel ?? payload.grant?.channel_id;
-    assert(routeChannel !== null && routeChannel !== undefined && String(routeChannel) !== '',
-      'PLATFORM_CHANNEL_MISMATCH', 'handoff');
-    writeHandoff({name, id: a.savedId, provider: savedProvider, clientToken: a.clientToken,
-      expires: Date.now() + HANDOFF_TTL, ...payload});
-    // Only an opaque routing nonce crosses the navigation. Standalone mode uses
-    // private GM storage; the embedded host uses one-time tab storage and
-    // consumes it synchronously at document-start.
+    GM_setValue(HANDOFF_KEY, {name, id: a.savedId, provider: a.provider || 'qq', expires: Date.now() + 30000, ...payload});
+    lifecycle('game.enter', sessionFacts(a));
+    // Only an opaque routing nonce crosses the navigation; credentials stay in
+    // private extension storage and are consumed synchronously at document-start.
     try {
-      if (!EMBEDDED) sessionStorage.setItem(TAB_KEY, a.savedId);
+      sessionStorage.setItem(TAB_KEY, a.savedId);
       window.name = name;
-      if (a.__sgsProfileId && a.saveSession !== false) sessionStorage.setItem('sgs-direct-profile-v1', a.__sgsProfileId);
-      else sessionStorage.removeItem('sgs-direct-profile-v1');
-      emitDirectEvent({type: 'navigate', provider: a.provider, account: a.account || '',
-        profileId: a.__sgsProfileId || '', clientToken: a.clientToken});
-      location.assign(ORIGIN + route.path +
-        (route.query ? '?channel_id=' + encodeURIComponent(String(routeChannel)) : ''));
+      location.assign(ORIGIN + (isSteam ? '/10/pc/index.php?channel_id=' + payload.grant.channel_id :
+        isBili ? '/10/pc/bilibiliWD_index.php?channel_id=120133' :
+        a.provider === 'honor' ? '/10/pc/index.php?channel_id=' + HONOR_CHANNEL :
+        a.provider === 'huawei' ? '/10/pc/index.php?channel_id=' + HUAWEI_CHANNEL :
+        a.provider === 'vivo' ? '/10/pc/index.php?channel_id=' + VIVO_CHANNEL :
+        a.provider === 'xiaomi' ? '/10/pc/index.php?channel_id=' + XIAOMI_CHANNEL :
+        a.provider === 'oppo' ? '/10/pc/index.php?channel_id=320123' : '/10/pc/index.php?channel_id=320023'));
     }
-    catch (_) { window.name = ''; discardHandoff(); throw failure('NAVIGATION_FAILED', 'handoff'); }
+    catch (_) { window.name = ''; GM_deleteValue(HANDOFF_KEY); throw failure('NAVIGATION_FAILED', 'handoff'); }
     delete a.grant; delete a.session;
   }
-  async function start(provider = 'qq', options = {}) {
-    const mode = ['vivo', 'oppo', 'steam', 'xiaomi'].includes(provider) && options?.mode === 'browser' ? 'browser' : 'qr';
+  // 网页登录（作者 10-21：OPPO／vivo／Steam 扫码卡上的「使用网页登录」）：官方登录页由壳在同一账号容器的浮层里打开，
+  // 走完后壳把结果交回来（Steam 回调地址、OPPO 回调 code、vivo 选定子账号后写下的两个 Cookie），从这里接上扫码之后的同一条换取链。
+  const HONOR_WEB_CALLBACK = 'hms://redirect_url';
+  const WEB_PROVIDERS = new Set(['steam', 'oppo', 'vivo', 'xiaomi', 'qq', 'huawei', 'honor']);
+  const webStates = new Map();
+  let webDeadline = 0;
+  function takeWebState(provider) {
+    const state = webStates.get(provider); webStates.delete(provider);
+    assert(state && Date.now() < webDeadline, 'WEB_RESULT_INVALID', provider + '_web');
+    return state;
+  }
+  // 只为拿 QQ 电脑版登录页地址发一次请求：不挂在扫码尝试上（出错后尝试可能已清掉），只允许 QQ 域名
+  function webFetchText(url, hosts) {
+    parseURL(url, hosts, 'web_login');
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(failure('REQUEST_TIMEOUT', 'web_login')), 15000);
+      GM_xmlhttpRequest({method: 'GET', url, timeout: 15000,
+        onload: r => { clearTimeout(timer); r.status >= 200 && r.status < 300 ? resolve(r.responseText || '') : reject(failure('HTTP_' + r.status, 'web_login')); },
+        onerror: () => { clearTimeout(timer); reject(failure('NETWORK_ERROR', 'web_login')); },
+        ontimeout: () => { clearTimeout(timer); reject(failure('REQUEST_TIMEOUT', 'web_login')); }});
+    });
+  }
+  async function webURL(provider) {
+    assert(WEB_PROVIDERS.has(provider), 'PROVIDER_UNAVAILABLE', 'web_login');
+    webStates.clear(); webDeadline = Date.now() + 10 * 60 * 1000;
+    // QQ：openmobile 授权页本身是手机页（会唤起手机 QQ）；取它内嵌的 ptlogin 登录页，关掉强制二维码＝账号密码登录。h5sig 不覆盖 force_qr（实测）
+    if (provider === 'qq') {
+      const state = random(); webStates.set('qq', state);
+      const html = await webFetchText(queryURL('https://openmobile.qq.com/oauth2.0/m_authorize', {client_id: QQ_APP, scope: 'get_simple_userinfo',
+        response_type: 'token', redirect_uri: 'auth://tauth.qq.com/', display: 'mobile', style: 'qr', pf: 'openmobile_android', isadd: '1',
+        cancel_display: '1', switch: '1', compat_v: '1', state}), QQ_HOSTS);
+      const match = /var\s+src\s*=\s*"([^"\n]+)"/.exec(html); assert(match, 'QQ_AUTH_PAGE_CHANGED', 'web_login');
+      const u = parseURL(decodeJS(match[1]), QQ_HOSTS, 'web_login');
+      assert(u.hostname === 'xui.ptlogin2.qq.com' && u.pathname === '/cgi-bin/xlogin' && u.searchParams.get('pt_3rd_aid') === QQ_APP &&
+        u.searchParams.get('state') === state, 'QQ_APPLICATION_MISMATCH', 'web_login');
+      u.searchParams.set('force_qr', '0');
+      return u.href;
+    }
+    // 华为：扫码路径同一个 OAuth 授权页（PKCE＋nonce），网页上密码／短信／扫码都在；校验值留着换令牌用
+    if (provider === 'huawei') {
+      const state = random(), verifier = random() + random(), nonce = random();
+      webStates.set('huawei', {state, verifier, nonce});
+      const challenge = huaweiBase64URL(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+      return queryURL(HUAWEI_AUTH + '/oauth2/v3/authorize', {access_type: 'offline', response_type: 'code', client_id: HUAWEI_APP,
+        ui_locales: 'zh-CN', redirect_uri: HUAWEI_CALLBACK, state, scope: 'openid profile', nonce, include_granted_scopes: 'true',
+        code_challenge_method: 'S256', code_challenge: challenge});
+    }
+    // 荣耀：网页 OAuth 授权页（扫码路径走 App 接口，不经此页）。回调 hms://redirect_url 实测被接受（zzz:// 被拒），code 能否直接用于游戏登录待真机
+    if (provider === 'honor') {
+      const state = random(); webStates.set('honor', state);
+      return queryURL(HONOR_AUTH + '/oauth2/v3/authorize', {response_type: 'code', client_id: HONOR_APP, redirect_uri: HONOR_WEB_CALLBACK,
+        state, scope: 'openid profile', access_type: 'offline', ui_locales: 'zh-CN'});
+    }
+    if (provider === 'steam') {
+      const state = random(); webStates.set('steam', state);
+      return queryURL('https://steamcommunity.com/oauth/login', {mobileminimal: '1', response_type: 'token', client_id: STEAM_APP, state, l: 'schinese'});
+    }
+    // 小米：扫码路径同一个 OAuth 授权页，_locale=zh_CN 即国内界面
+    if (provider === 'xiaomi') {
+      const state = random(); webStates.set('xiaomi', state);
+      return queryURL('https://account.xiaomi.com/oauth2/authorize', {client_id: XIAOMI_OAUTH_APP, response_type: 'code', scope: '1 3',
+        redirect_uri: XIAOMI_CALLBACK, state, _locale: 'zh_CN'});
+    }
+    // OPPO 账号页按访问者 IP 分国内版／国际版（globalConfig.js 的 globalIsExp），同一地址；id-cn 没有网页登录页
+    if (provider === 'oppo') return queryURL('https://id.heytap.com/identity/web/v1/authn/auth-and-callback',
+      {bizAppKey: OPPO_BIZ, callback: OPPO_CALLBACK, language: 'zh-CN', toRegisterPage: 'false'});
+    return 'https://joint.vivo.com.cn/game-subaccount-login/?from=login';
+  }
+  function applyWebResult(a, provider, web) {
+    const stage = provider + '_web';
+    assert(WEB_PROVIDERS.has(provider) && web && typeof web === 'object', 'WEB_RESULT_INVALID', stage);
+    lifecycle('login.web', {provider});
+    if (provider === 'steam') {
+      const u = parseURL(String(web.href || ''), new Set(['10th-ly-login.sanguosha.com']), stage);
+      assert(u.pathname === '/steam/oauth/callback.html', 'WEB_RESULT_INVALID', stage);
+      const p = uniqueParams(u.hash.slice(1), stage);
+      assert(p.state && p.state === takeWebState('steam'), 'STEAM_STATE_MISMATCH', stage);
+      const {access_token} = fields(p, ['access_token'], stage);
+      const seconds = Number(p.expires_in) || 0;
+      assert(seconds >= 0 && seconds < 1e10, 'STEAM_TOKEN_SCHEMA_CHANGED', stage);
+      a.steam = {access_token, steamID: /^\d{17}$/.test(p.steamid || '') ? p.steamid : '', expires: seconds ? Date.now() + seconds * 1000 : 0,
+        retainedUntil: Date.now() + 86400000, web: true};
+    } else if (provider === 'xiaomi' || provider === 'qq' || provider === 'honor') {
+      const state = takeWebState(provider);
+      a.state = state; const href = String(web.href || '');
+      if (provider === 'xiaomi') a.xiaomiCode = xiaomiCallback(a, href);
+      else if (provider === 'honor') {
+        let u; try { u = new URL(href); } catch (_) { throw failure('WEB_RESULT_INVALID', stage); }
+        assert(u.protocol === 'hms:' && u.host === 'redirect_url' && u.pathname === '' && !u.username && !u.password && !u.hash, 'WEB_RESULT_INVALID', stage);
+        const p = uniqueParams(u.search.slice(1), stage); assert(p.state === state && !p.error, 'HONOR_STATE_MISMATCH', stage);
+        a.honor = {webCode: fields(p, ['code'], stage).code};
+      } else if (isProxy(href)) a.redirect = href; /* QQ 中转页：交给 redeem 取回调 */
+      else a.qq = callback(a, href); /* QQ auth://tauth.qq.com/ 回调：带 openid、access_token，对 state */
+    } else if (provider === 'huawei') {
+      const w = takeWebState('huawei');
+      a.state = w.state; a.huawei = {verifier: w.verifier, nonce: w.nonce, webCallback: String(web.href || '')};
+    } else if (provider === 'oppo') {
+      const code = String(web.code || '');
+      assert(/^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(code), 'WEB_RESULT_INVALID', stage);
+      a.oppoCode = code;
+    } else {
+      const uid = String(web.subOpenId || ''), session = String(web.openToken || '');
+      assert(/^[A-Za-z0-9+/=_.~-]{1,2048}$/.test(uid) && /^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(session), 'WEB_RESULT_INVALID', stage);
+      a.vivo = {uid, session, username: ''};
+    }
+  }
+  async function start(provider = 'qq', web = null) {
     assert(['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor'].includes(provider), 'PROVIDER_UNAVAILABLE', 'setup');
-    const profileId = sessionText(options?.profileId, 256);
-    if (profileId) assert(SESSION_PROFILE_PATTERN.test(profileId), 'PROFILE_ID_INVALID', 'setup');
-    const saveSession = options?.saveSession !== false;
-    const clientToken = normalizeClientToken(options?.clientToken || random());
-    const generation = ++runGeneration;
-    activeRunGeneration = generation;
+    if (busy) return;
+    if (!web && !attempt && remembered()?.provider === provider) { await resume(); return; }
     if (middle && (attempt?.provider || 'qq') === provider && attempt?.grant && Date.now() < attempt.grantExpires) {
       middle.node.scrollIntoView({block: 'center'}); return;
     }
     busy = true; setProvidersBusy(true); ui.output.textContent = '';
+    lifecycle('login.start', {provider});
+    let mine = null; // 这次 start 跑的尝试；被取消或被新尝试顶替后，它残留的异步链抛出的错不是当前的错
     try {
-      const requestedNonce = mode === 'browser' ? String(options?.nonce || '') : '';
-      if (requestedNonce) assert(/^[a-f0-9]{16,64}$/.test(requestedNonce), 'BROWSER_NONCE_INVALID', 'setup');
-      const requestedState = mode === 'browser' && options?.state ? String(options.state) : '';
-      if (requestedState) assert(/^[a-f0-9]{32}$/.test(requestedState), 'BROWSER_STATE_INVALID', 'setup');
-      // A new explicit start supersedes the previous flow. Releasing its lock and
-      // clearing its attempt before acquiring ours prevents a stale finally block
-      // from cancelling the provider the user just selected.
-      if (attempt) {
-        const previousToken = attempt.clientToken || '';
-        restoreMiddle(previousToken);
-        clearAttempt(previousToken);
+      if (web || !attempt || (attempt.provider || 'qq') !== provider || Date.now() >= attempt.expires || attempt.renewalFailed) {
+        if (attempt?.renewalFailed && attempt.provider === provider) forget(attempt, 'RENEWAL_FAILED_RESCAN');
+        restoreMiddle(); clearAttempt(); await acquireLock();
+        assert(!disposed, 'PAGE_CLOSED', 'setup');
+        attempt = {state: random(), provider, device: random(), expires: Date.now() + (provider === 'xiaomi' ? 300000 : 180000),
+          stage: 'setup', cookies: new Cookies(), requests: new Set()};
+        if (web) applyWebResult(attempt, provider, web);
+        else if (provider === 'steam') restoreSteamCheckpoint(attempt);
       }
-      if (releaseLock) unlock(lockOwnerToken);
-      assert(!disposed, 'PAGE_CLOSED', 'setup');
-      await acquireLock(clientToken);
-      if (activeRunGeneration !== generation) { unlock(clientToken); return; }
-      assert(!disposed, 'PAGE_CLOSED', 'setup');
-      attempt = {state: requestedState || random(), provider, mode, device: random(), clientToken, generation,
-        saveSession, profileId, __sgsProfileId: profileId,
-        expires: Date.now() + (mode === 'browser' ? 11 * 60 * 1000 : 10 * 60 * 1000),
-        stage: 'setup', cookies: new Cookies(), requests: new Set()};
-      if (provider === 'steam' && mode === 'qr') restoreSteamCheckpoint(attempt);
-      if (requestedNonce) attempt.browserNonce = requestedNonce;
-      if (!releaseLock) await acquireLock(clientToken);
-      const a = attempt;
-      assert(a && a.clientToken === clientToken, 'ATTEMPT_EXPIRED', 'setup');
+      if (!releaseLock) await acquireLock();
+      const a = attempt; mine = a;
       active(a);
       // Preserve completed exchange stages on an interrupted run. A used game
       // grant is never replayed, nor is an expired grant relabelled as fresh.
       if (a.grant && Date.now() >= a.grantExpires) {
-        restoreMiddle(a.clientToken); delete a.grant; delete a.session;
+        restoreMiddle(); delete a.grant; delete a.session;
       }
-      if (!a.grant) restoreMiddle(a.clientToken);
-      await exchange(a);
-      if (activeRunGeneration !== generation || attempt !== a) return;
-      await showMiddle(a);
+      if (!a.grant) restoreMiddle();
+      await exchange(a); await showMiddle(a);
     } catch (error) {
-      if (activeRunGeneration !== generation) return;
-      const current = attempt;
-      if (current?.clientToken && current.clientToken !== clientToken) return;
-      invalidateOnError(current, error);
-      hideQR(current); errorUI(error, clientToken);
-      if (!current?.redirect && !current?.qq && !current?.wxCode && !current?.wegame && !current?.bili && !current?.biliChallenge &&
-        !current?.steamChallenge && !current?.steamWeb && !current?.steam && !current?.oppoQid && !current?.oppoConfirmed &&
-        !current?.oppoCode && !current?.oppoAccount && !current?.oppo && !current?.xiaomiChallenge &&
-        !current?.xiaomiLocation && !current?.xiaomiCode && !current?.xiaomiOAuth && !current?.xiaomi &&
-        !current?.vivoQR && !current?.vivoConfirmed && !current?.vivo && !current?.huawei && !current?.honor) clearAttempt(clientToken);
-    } finally {
-      unlock(clientToken);
-      if (activeRunGeneration === generation) { busy = false; setProvidersBusy(false); }
-    }
+      // 取消、过期清理、换方式都会先 clearAttempt，旧链随后在 active() 里抛 ATTEMPT_EXPIRED；
+      // 那不是当前尝试的失败，不能记成错误（原来取消扫码后约 1.7 秒会冒出一个「尝试过期」）。真过期由 expiryTimer 自己报。
+      if (mine && attempt !== mine) return;
+      invalidateOnError(attempt, error);
+      hideQR(attempt); errorUI(error);
+      if (!attempt?.redirect && !attempt?.qq && !attempt?.wxCode && !attempt?.wegame && !attempt?.bili && !attempt?.biliChallenge &&
+        !attempt?.steamChallenge && !attempt?.steamWeb && !attempt?.steam && !attempt?.oppoQid && !attempt?.oppoConfirmed &&
+        !attempt?.oppoCode && !attempt?.oppoAccount && !attempt?.oppo && !attempt?.xiaomiChallenge &&
+        !attempt?.xiaomiLocation && !attempt?.xiaomiCode && !attempt?.xiaomiOAuth && !attempt?.xiaomi &&
+        !attempt?.vivoQR && !attempt?.vivoConfirmed && !attempt?.vivo && !attempt?.huawei && !attempt?.honor) clearAttempt();
+    } finally { unlock(); busy = false; setProvidersBusy(false); }
   }
   function mount() {
     if (document.getElementById('jnd-wegame-login')) {
@@ -4954,12 +3793,13 @@
     huawei.addEventListener('click', () => start('huawei'));
     honor.addEventListener('click', () => start('honor'));
     const expiryTimer = setInterval(() => {
-      if (attempt && Date.now() >= attempt.expires) expireAttempt(attempt.clientToken || '');
+      if (attempt && Date.now() >= attempt.expires) { errorUI(failure('ATTEMPT_EXPIRED', attempt.stage)); forget(attempt, 'ATTEMPT_EXPIRED'); restoreMiddle(); clearAttempt(); }
     }, 1000);
     window.addEventListener('pagehide', () => {
       disposed = true; clearInterval(expiryTimer); clearAttempt();
     }, {once: true});
-    cleanupHandoff();
+    const oldHandoff = GM_getValue(HANDOFF_KEY, null);
+    if (oldHandoff && oldHandoff.expires <= Date.now()) GM_deleteValue(HANDOFF_KEY);
     // 微端桥（仅壳内）：隐藏浮动按钮，把二维码与状态投影给壳，由壳的原生弹窗呈现；
     // 流程本身不变，壳只调用 start／cancel。blob 二维码转成 data URL 才能跨窗口显示。
     // 投影是归一化的：所有渠道都是同一形状 {qr: data URL 或空, text: 玩家可读的一句话, error: {code, stage} 或 null}；
@@ -4967,28 +3807,13 @@
     if (page.__JND_HOST?.kind === 'micro') {
       host.style.display = 'none';
       const listeners = new Set();
-      let qrData = '', qrSource = '';
+      let qrData = '', qrSource = '', qrOwner = null;
       const ERROR_TEXT = {
         LOGIN_CANCELLED: '已取消', OTHER_TAB_ACTIVE: '另一个窗口正在登录，请先完成或关闭它',
         QR_EXPIRED: '二维码已过期，请重新发起', REQUEST_TIMEOUT: '连接超时，请重试', NETWORK_ERROR: '网络连接失败，请重试',
         OPPO_TE_UNAVAILABLE: '登录环境校验失败，请重试',
         OPPO_IDENTIFY_TIMEOUT: '安全验证超时，请重试', OPPO_IDENTIFY_CLOSED: '已取消安全验证',
         ACCOUNT_MISMATCH: '扫码账号与当前账号不一致', WEB_LOCKS_UNAVAILABLE: '当前环境不支持扫码登录',
-        VIVO_BROWSER_TIMEOUT: '等待 Vivo 官方登录超时，请重新打开登录窗口',
-        OPPO_BROWSER_TIMEOUT: '等待 OPPO 官方登录超时，请重新打开登录窗口',
-        STEAM_BROWSER_TIMEOUT: '等待 Steam 官方登录超时，请重新打开官方登录窗口',
-        STEAM_PAGE_RESULT_INVALID: 'Steam 官方回调格式异常，请重新登录',
-        STEAM_STATE_MISMATCH: 'Steam 回调状态不匹配，本次授权已拒绝',
-        STEAM_PAGE_RESULT_EXPIRED: 'Steam 官方回调已过期，请重新登录',
-        XIAOMI_BROWSER_TIMEOUT: '等待小米官方登录超时，请重新打开登录窗口',
-        XIAOMI_PAGE_RESULT_INVALID: '小米官方回调格式异常，请重新登录',
-        XIAOMI_PAGE_RESULT_EXPIRED: '小米官方回调已过期，请重新登录',
-        XIAOMI_PAGE_ORIGIN_MISMATCH: '小米官方回调来源不匹配，本次登录已拒绝',
-        XIAOMI_STATE_MISMATCH: '小米回调状态不匹配，本次授权已拒绝',
-        VIVO_ACCOUNT_SELECTION_REQUIRED: 'Vivo 账号有多个子账号，请先在官方页面明确选择后重试',
-        VIVO_REAL_NAME_REQUIRED: 'Vivo 账号未完成实名认证或当前状态不允许登录',
-        BILI_GAME_CALLBACK_UNAVAILABLE: '已进入游戏页，但游戏没有就绪，未能交接触摸登录回调',
-        BILI_CHANNEL_MISMATCH: 'B 站游戏页渠道号不匹配，请刷新后重试',
       };
       const humanError = code => {
         if (ERROR_TEXT[code]) return ERROR_TEXT[code];
@@ -5001,27 +3826,39 @@
       const humanText = () => {
         if (microError) return humanError(microError.code);
         if (!attempt) return '';
-        if (attempt.stage === 'ready') return attempt.mode === 'browser' ? '官方网页登录成功，正在进入游戏' : '扫码成功，正在进入游戏';
-        if (attempt.mode === 'browser') return attempt.browserNotice || '请在官方登录窗口完成登录，完成后会自动继续';
-        if (attempt.browserNotice) return attempt.browserNotice;
+        if (attempt.stage === 'ready') return '扫码成功，正在进入游戏';
         if (!ui.screen.hidden && qrData) return '请用手机扫码';
         return '正在获取二维码…';
       };
-      const snapshot = () => ({busy, provider: attempt?.provider || null, mode: attempt?.mode || '', stage: attempt?.stage || '',
-        notice: attempt?.browserNotice || '', qr: ui.screen.hidden ? '' : qrData,
-        text: humanText(), error: microError ? {...microError} : null});
+      const snapshot = () => ({busy, provider: attempt?.provider || null, stage: attempt?.stage || '',
+        qr: ui.screen.hidden || qrOwner !== attempt ? '' : qrData, text: humanText(), error: microError ? {...microError} : null});
       const notify = () => { const s = snapshot(); for (const l of [...listeners]) { try { l(s); } catch (_) {} } };
       const refreshQr = async () => {
         const src = ui.screen.hidden ? '' : ui.screen.getAttribute('src') || '';
-        if (src === qrSource) { notify(); return; }
-        qrSource = src; qrData = '';
+        const owner = attempt;
+        if (src === qrSource && qrOwner === owner) { notify(); return; }
+        qrSource = src; qrOwner = owner; qrData = '';
+        let data = '';
         if (src) {
           try {
-            const blob = await (await fetch(src)).blob();
-            qrData = await new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => resolve(''); r.readAsDataURL(blob); });
-          } catch (_) { qrData = ''; }
-          if (qrSource !== src) return;
+            // QR images are local blob:/data: URLs; a canvas copy avoids fetch, which the release gate forbids.
+            data = await new Promise(resolve => {
+              const img = new Image();
+              img.onload = () => {
+                try {
+                  const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+                  c.getContext('2d').drawImage(img, 0, 0); resolve(c.toDataURL('image/png'));
+                } catch (_) { resolve(''); }
+              };
+              img.onerror = () => resolve('');
+              img.src = src;
+            });
+          } catch (_) { data = ''; }
         }
+        // 异步图片只允许提交给原任务，旧转换不能覆盖新二维码。
+        if (qrSource !== src || qrOwner !== owner || attempt !== owner
+          || (ui.screen.hidden ? '' : ui.screen.getAttribute('src') || '') !== src) return;
+        qrData = data;
         notify();
       };
       const observer = new MutationObserver(records => {
@@ -5029,48 +3866,22 @@
       });
       observer.observe(screen, {attributes: true, attributeFilter: ['src', 'hidden']});
       observer.observe(output, {childList: true, characterData: true, subtree: true});
-      const resumeSession = resume;
-      const bindLoginProfile = bindProfile;
-      const forgetProfileSessions = forgetSessions;
       page.__JND_UNIFIED_LOGIN = Object.freeze({
         version: VERSION,
         // In-page widgets (OPPO captcha / identify) live under the shell's QR card
         // and must be able to force a projection update on their own.
         notify,
-        providers: Object.freeze(['qq', 'wx', 'bilibili', 'steam', 'oppo', 'xiaomi', 'vivo', 'huawei', 'honor']),
-        start(provider, options = {}) { microError = null; const p = start(provider, options); notify(); return Promise.resolve(p).finally(notify); },
-        resume(options = {}) {
-          microError = null;
-          const p = resumeSession(options);
-          notify();
-          return Promise.resolve(p).finally(notify);
-        },
-        bindProfile(profileId, clientToken = '', saveSession = true) {
-          const bound = bindLoginProfile(profileId, clientToken, saveSession);
-          notify();
-          return bound;
-        },
-        forgetSessions(profileId) {
-          const removed = forgetProfileSessions(profileId);
-          notify();
-          return removed;
-        },
-        hasSession(provider = '', profileId = '') {
-          return !!savedSession(provider, profileId);
-        },
-        cancel(clientToken = '', reason = 'user') {
-          const cancelled = cancelFlow(clientToken, reason);
-          if (cancelled) notify();
-          return cancelled;
-        },
-        enter() { return attempt ? enterGame(attempt) : Promise.resolve(); },
+        providers: Object.freeze(['qq', 'wx', 'steam', 'oppo', 'vivo', 'huawei', 'honor', 'xiaomi', 'bilibili']),
+        start(provider) { microError = null; const p = start(provider); notify(); return Promise.resolve(p).finally(notify); },
+        webProviders: Object.freeze([...WEB_PROVIDERS]),
+        webURL,
+        webFinish(provider, result) { microError = null; const p = start(provider, result); notify(); return Promise.resolve(p).finally(notify); },
+        cancel() { microError = null; restoreMiddle(); clearAttempt(); ui.output.textContent = ''; notify(); },
         get: snapshot,
         subscribe(listener) { listeners.add(listener); try { listener(snapshot()); } catch (_) {} return () => listeners.delete(listener); },
       });
     }
-    // The host userscript owns account restoration and starts providers only
-    // from an explicit user action.
-    if (page.__JND_HOST?.source !== 'sgs-multichannel') void resume();
+    void resume();
     window.addEventListener('pageshow', event => {
       // A bfcache restore has no live closure or credential handoff remaining.
       if (event.persisted && disposed) location.reload();
@@ -5078,4 +3889,3 @@
   }
   if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount, {once: true});
 })();
-/* DIRECT-ENGINE-END */

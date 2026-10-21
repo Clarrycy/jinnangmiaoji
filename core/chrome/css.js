@@ -124,10 +124,13 @@ function chromeCss(TOKENS, SPEC) {
     /* 菜单家族入场：从锚点下方 4px 淡入（100ms 透明度、140ms 位移，先快后慢），关闭即刻消失（Chrome／macOS 同款）。对话框和保存卡已有入场，菜单没有就显得「弹」出来 */
     .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden]) { animation: menuFade .1s ease-out, menuSlide .14s cubic-bezier(0,0,.2,1); } /* 用 animation 不用 transition：transition 让元素常驻合成层，定稿态文字抗锯齿会变 */
     @keyframes menuFade { from { opacity: 0; } to { opacity: 1; } } @keyframes menuSlide { from { transform: translateY(-4px); } to { transform: none; } }
+    /* 收起＝入场反着播（作者 10-21）：淡出＋上收 4px，0.1 秒，播完由引擎藏掉；收起途中不接点击 */
+    .menu.leaving:not([hidden]), .amenu.leaving:not([hidden]), .tlmenu.leaving:not([hidden]) { animation: menuFadeOut .1s ease-in forwards, menuSlideOut .1s ease-in forwards; pointer-events: none; }
+    @keyframes menuFadeOut { from { opacity: 1; } to { opacity: 0; } } @keyframes menuSlideOut { from { transform: none; } to { transform: translateY(-4px); } }
     .menu .item { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 10px; border-radius: 4px; }
     .menu .item:hover { background: ${TOKENS.hover}; }
     /* 宽度是档位不是量体裁衣：图标＋动宾短语、右侧无内容的菜单取 160——文字列（40 起、4 字到 92）之后留一个与左列等宽的呼吸列；208 是右键菜单档（长短语），112 则让 hover 药丸贴着字 */
-    .pmenu { width: 160px; } .cmenu { width: 208px; } .submenu { width: 184px; } .providermenu { width: 176px; } .pmenu .item { justify-content: flex-start; gap: 10px; } .pmenu .item i { width: 16px; height: 16px; display: grid; place-items: center; color: ${TOKENS.ink2}; } .pmenu .item i svg { width: 16px; height: 16px; } .pmenu .item.disabled i { color: ${TOKENS.ink3}; }
+    .pmenu { width: 160px; } .cmenu { width: 208px; } .submenu { width: 184px; } .pmenu .item { justify-content: flex-start; gap: 10px; } .pmenu .item i { width: 16px; height: 16px; display: grid; place-items: center; color: ${TOKENS.ink2}; } .pmenu .item i svg { width: 16px; height: 16px; } .pmenu .item.disabled i { color: ${TOKENS.ink3}; }
     .menu .item.disabled { color: ${TOKENS.ink3}; } .menu .item.disabled:hover { background: transparent; }
     .menu .item.sub.open { background: ${TOKENS.hover}; }
     .menu .item.sub::after { content: ""; width: 6px; height: 6px; border-right: 1.4px solid ${TOKENS.ink3}; border-top: 1.4px solid ${TOKENS.ink3}; transform: rotate(45deg); }
@@ -135,6 +138,7 @@ function chromeCss(TOKENS, SPEC) {
     .chk { width: 10px; height: 6px; border-left: 1.6px solid ${TOKENS.ink2}; border-bottom: 1.6px solid ${TOKENS.ink2}; transform: rotate(-45deg) translateY(-1px); }
     /* ===== 壳内页面（账号／设置／更新／关于）：同一套列表语法；内容居中 760 ===== */
     #viewport.page { background: #fff; }
+    #viewport { isolation: isolate; } /* 视域自成层叠上下文：蒙版（z 6）、保存卡（z 7）只在视域内比高低，标题栏的下拉菜单（z 5）永远压在它们之上 */
     .pg { position: absolute; inset: 0; background: #fff; color: ${TOKENS.ink}; font: 13px/1.5 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif; overflow: auto; user-select: text; scrollbar-gutter: stable; }
     /* 自绘滚动条：6px、透明轨道、悬停才显 */
     .pg::-webkit-scrollbar { width: 10px; } .pg::-webkit-scrollbar-track { background: transparent; } .pg::-webkit-scrollbar-thumb { background: transparent; border: 3px solid transparent; border-radius: 6px; background-clip: padding-box; } .pg:hover::-webkit-scrollbar-thumb { background-color: #c4c4c7; }
@@ -236,23 +240,72 @@ function chromeCss(TOKENS, SPEC) {
     #viewport .dlg .dchk[hidden] { display: none; } #viewport .dlg .dchk { display: flex; align-items: center; gap: 8px; margin-top: 12px; height: 20px; color: ${TOKENS.ink2}; font-size: 13px; cursor: pointer; user-select: none; } #viewport .dlg .dchk input { appearance: none; -webkit-appearance: none; margin: 0; width: 16px; height: 16px; border: 1px solid #c8c8cc; border-radius: 4px; background: #fff; position: relative; cursor: pointer; outline: none; transition: background-color .12s ease, border-color .12s ease; } #viewport .dlg .dchk input:hover { border-color: ${TOKENS.ink3}; } #viewport .dlg .dchk input:checked { background: ${TOKENS.ink}; border-color: ${TOKENS.ink}; } #viewport .dlg .dchk input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 5px; height: 9px; border-right: 1.8px solid #fff; border-bottom: 1.8px solid #fff; transform: rotate(45deg); } #viewport .dlg .dchk input:focus-visible { box-shadow: 0 0 0 2px #fff, 0 0 0 4px ${TOKENS.ink}; } /* 系统复选框的橙色焦点环与尺寸都不属于这套皮，自绘；勾中用墨色，不开第二处彩色 */
     #viewport .dlg .dnote[hidden] { display: none; } #viewport .dlg .dnote { display: block; width: 100%; margin-top: 12px; padding: 7px 10px; line-height: 1.5; resize: none; }
     #viewport .dlg .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-    /* 扫码卡：码是一个有边界的物件（发丝环把留白圈进码里），卡只给它一圈 20 的边：顶部是标题行（稍窄），左右下都是 20；
-       码 248 几乎填满 288 的卡，状态画在码里；两行说明永远占位，卡高不随文字行数变 */
+    /* 扫码卡与保存卡按标签藏起来靠 hidden；上面两条规则写死了 display: flex，会盖掉浏览器默认的 [hidden]，卡就画在所有标签上
+       （作者 10-21 实机：OPPO 卡开着时新建官服标签，一打开菜单 chrome 展开，那张卡就露在新标签上）。这里显式让 hidden 生效 */
+    #viewport .scrim[hidden], #viewport .save[hidden] { display: none; }
+    /* 扫码卡（作者 10-20 选 A 横版、码右置，并保留 C 的灰底语言）：左＝流程本身：平台名／三步清单／底部状态行；右＝灰色舞台托白码块，状态标识盖在舞台上。
+       卡 480×256，内边距 24；舞台 208；码块 176。五个阶段同一张表只换标记，卡高恒定 */
     #viewport .scrim.center { align-items: center; padding-top: 0; }
-    #viewport .dlg.qr { width: 288px; padding: 20px; text-align: center; }
-    #viewport .dlg.qr .hd { display: flex; align-items: center; gap: 8px; height: 20px; text-align: left; } #viewport .dlg.qr .hd .bi { width: 16px; height: 16px; border-radius: 3px; flex: none; } #viewport .dlg.qr .hd .bi[hidden] { display: none; } #viewport .dlg.qr .hd h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; }
-    #viewport .dlg.qr .qrbox { position: relative; width: 248px; height: 248px; margin: 16px auto 0; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px ${TOKENS.line}; overflow: hidden; }
-    #viewport .dlg.qr[data-stage="loading"] .qrbox { background: ${TOKENS.surface2}; box-shadow: none; }
-    #viewport .dlg.qr .qrbox.act { cursor: pointer; }
-    #viewport .dlg.qr .qrbox img { width: 248px; height: 248px; display: block; image-rendering: pixelated; transition: opacity .16s ease; } #viewport .dlg.qr .qrbox img[hidden] { display: none; }
-    #viewport .dlg.qr[data-stage="confirm"] .qrbox img, #viewport .dlg.qr[data-stage="exchanging"] .qrbox img, #viewport .dlg.qr[data-stage="error"] .qrbox img { opacity: .12; }
-    #viewport .dlg.qr .ov { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; } #viewport .dlg.qr .ov i { display: none; }
+    #viewport .scrim.qr-scrim { transition: opacity .22s ease; }
+    #viewport .scrim.qr-scrim.closing { pointer-events: none; }
+    #viewport .dlg.qr { transform: translateY(4px) scale(.985); transition: transform .24s cubic-bezier(.2,.7,.2,1), opacity .22s ease; width: 480px; padding: 24px; display: flex; gap: 24px; align-items: stretch; text-align: left; }
+    #viewport .dlg.qr .stage { position: relative; flex: none; width: 208px; height: 208px; border-radius: 8px; background: ${TOKENS.surface2}; display: grid; place-items: center; }
+    #viewport .dlg.qr .qrbox { width: 176px; height: 176px; border-radius: 6px; background: #fff; overflow: hidden; opacity: 0; transition: opacity .22s ease; }
+    #viewport .dlg.qr .qrbox.has-qr { opacity: 1; }
+    #viewport .dlg.qr .qrbox img { width: 176px; height: 176px; display: block; image-rendering: pixelated; } #viewport .dlg.qr .qrbox img[hidden] { display: none; }
+    #viewport .dlg.qr[data-stage="confirm"] .qrbox.has-qr, #viewport .dlg.qr[data-stage="verify"] .qrbox.has-qr, #viewport .dlg.qr[data-stage="exchanging"] .qrbox.has-qr, #viewport .dlg.qr[data-stage="entering"] .qrbox.has-qr { opacity: .08; }
+    #viewport .dlg.qr[data-stage="error"] .qrbox, #viewport .dlg.qr[data-stage="error"] .qrbox.has-qr { opacity: 0; } /* 出错时旧码整个退场，不留压淡的残影 */
+    #viewport .dlg.qr .ov { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; } #viewport .dlg.qr .ov > * { grid-area: 1 / 1; opacity: 0; transition: opacity .18s ease; }
     #viewport .dlg.qr .ov .spin { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(0,0,0,.1); border-top-color: ${TOKENS.ink}; animation: qrspin .9s linear infinite; } @keyframes qrspin { to { transform: rotate(360deg); } }
-    #viewport .dlg.qr .ov .ok, #viewport .dlg.qr .ov .again { width: 56px; height: 56px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.14), 0 0 0 1px rgba(0,0,0,.06); display: none; place-items: center; color: ${TOKENS.ink}; } #viewport .dlg.qr .ov svg { width: 26px; height: 26px; stroke-width: 1.6; }
-    #viewport .dlg.qr[data-stage="loading"] .ov .spin, #viewport .dlg.qr[data-stage="exchanging"] .ov .spin { display: block; }
-    #viewport .dlg.qr[data-stage="confirm"] .ov .ok { display: grid; } #viewport .dlg.qr[data-stage="error"] .ov .again { display: grid; }
-    #viewport .dlg.qr .qst { margin-top: 16px; font-size: 13px; line-height: 20px; color: ${TOKENS.ink}; }
-    #viewport .dlg.qr .qsub { margin-top: 0; min-height: 18px; font-size: 12px; line-height: 18px; color: ${TOKENS.ink2}; }
+    #viewport .dlg.qr .ov .ok { width: 36px; height: 36px; display: grid; place-items: center; color: ${TOKENS.ink}; } /* 不带圈：标识直接落在压淡的码上，码压到 .08 让它站得住 */ #viewport .dlg.qr .ov svg { width: 36px; height: 36px; stroke-width: 1.4; }
+    #viewport .dlg.qr[data-stage="loading"] .ov .spin, #viewport .dlg.qr[data-stage="retrying"] .ov .spin { opacity: 1; }
+    #viewport .dlg.qr .ov .dots { display: flex; gap: 7px; align-items: center; }
+    #viewport .dlg.qr .ov .dots b { width: 7px; height: 7px; border-radius: 50%; background: ${TOKENS.ink}; animation: qrbreathe 1.4s ease-in-out infinite; }
+    #viewport .dlg.qr .ov .dots b:nth-child(2) { animation-delay: .14s; } #viewport .dlg.qr .ov .dots b:nth-child(3) { animation-delay: .28s; }
+    #viewport .dlg.qr[data-stage="verify"] .ov .dots, #viewport .dlg.qr[data-stage="exchanging"] .ov .dots, #viewport .dlg.qr[data-stage="entering"] .ov .dots { opacity: 1; }
+    @keyframes qrbreathe { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+    #viewport .dlg.qr[data-stage="confirm"] .ov .ok { opacity: 1; }
+    /* 出错重试（作者 10-21 定 C）：白码块本身变成按钮——旧码退场，同一位置、同一尺寸的白块写「重新获取二维码」，只有它能点 */
+    #viewport .dlg.qr .retry { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+    #viewport .dlg.qr[data-stage="error"] .retry { opacity: 1; pointer-events: auto; }
+    #viewport .dlg.qr .retry .rb { width: 176px; height: 176px; padding: 0; border: 0; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: #fff; color: ${TOKENS.ink2}; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: color .12s ease, box-shadow .12s ease, background-color .12s ease; }
+    #viewport .dlg.qr .retry .rb:hover { color: ${TOKENS.ink}; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+    #viewport .dlg.qr .retry .rb:active { background: #fafafa; }
+    #viewport .dlg.qr .retry .rb svg { width: 24px; height: 24px; stroke-width: 1.4; color: ${TOKENS.ink}; flex: none; }
+    /* 左栏与舞台共用三条线：标题顶齐舞台顶，状态行底齐舞台底，三步清单的中心对齐码的中心（space-between）；原来清单贴着标题，左下空出 74 像素的洞 */
+    /* 三块各自绝对定位：标题顶、清单对齐码中心、状态行底。状态行一行变两行时只占自己的位置，清单不动（原来 space-between 会把清单顶上去） */
+    #viewport .dlg.qr .side { flex: 1; min-width: 0; position: relative; }
+    #viewport .dlg.qr .hd { display: flex; align-items: center; gap: 8px; height: 20px; } #viewport .dlg.qr .hd .bi { width: 16px; height: 16px; border-radius: 3px; flex: none; } #viewport .dlg.qr .hd .bi[hidden] { display: none; } #viewport .dlg.qr .hd h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* 步骤表：标记 18 圆——当前步墨色实心白字，完成步墨色实心打勾，未到步灰环灰字，登录中那步转圈 */
+    #viewport .dlg.qr .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); }
+    #viewport .dlg.qr .steps li { display: flex; align-items: center; gap: 10px; height: 24px; white-space: nowrap; font-size: 13px; line-height: 20px; color: ${TOKENS.ink3}; }
+    #viewport .dlg.qr .steps li i { width: 18px; height: 18px; border-radius: 50%; flex: none; display: grid; place-items: center; font-style: normal; font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; box-shadow: inset 0 0 0 1px #c8c8cc; color: ${TOKENS.ink3}; }
+    #viewport .dlg.qr .steps li i svg { width: 12px; height: 12px; stroke-width: 2; }
+    #viewport .dlg.qr .steps li.cur { color: ${TOKENS.ink}; } #viewport .dlg.qr .steps li.cur i { background: ${TOKENS.ink}; color: #fff; box-shadow: none; } /* 状态只用颜色和标记表达，不改字重：字重一变字宽就变，整列会抖 */
+    #viewport .dlg.qr .steps li.done { color: ${TOKENS.ink2}; } #viewport .dlg.qr .steps li.done i { background: ${TOKENS.ink}; color: #fff; box-shadow: none; }
+    #viewport .dlg.qr .steps li.busy { color: ${TOKENS.ink}; } #viewport .dlg.qr .steps li.busy i { box-shadow: none; border: 2px solid rgba(0,0,0,.1); border-top-color: ${TOKENS.ink}; box-sizing: border-box; animation: qrspin .9s linear infinite; }
+    /* 「使用网页登录」：左下角浅灰按钮（作者 10-21 定乙），兜底常在，样式同对话框次按钮；换码时随新码重新淡入 */
+    /* 量过（作者 10-21）：步骤圆圈 18 宽、中心 x=9，步骤文字起于 x=28、13px。按钮左缘外探 7：箭头（12 宽）落在 3–15、中心 9；文字起于 28 */
+    #viewport .dlg.qr .wl { position: absolute; z-index: 1; left: -7px; bottom: 0; display: inline-flex; align-items: center; gap: 13px; padding: 0 12px 0 10px; font-size: 13px; -webkit-tap-highlight-color: transparent; outline: none; }
+    #viewport .dlg.qr .wl[hidden] { display: none; } #viewport .dlg.qr .wl svg { width: 12px; height: 12px; flex: none; }
+    #viewport .dlg.qr .wl { transition: opacity .3s ease, background-color .12s ease; } #viewport .dlg.qr .wl.arming { opacity: 0; pointer-events: none; } /* 稍等再淡入 */
+    /* 码那块里的提示：转圈下面写获取中／重试中；出错时白块上方写原因 */
+    #viewport .dlg.qr .ov .ovt { grid-area: auto; position: absolute; left: 0; right: 0; top: calc(50% + 26px); text-align: center; font-size: 12px; line-height: 18px; color: ${TOKENS.ink2}; white-space: nowrap; }
+    #viewport .dlg.qr[data-stage="loading"] .ov .ovt, #viewport .dlg.qr[data-stage="retrying"] .ov .ovt { opacity: 1; }
+
+    /* 网页登录浮层：外框照外壳——32 高灰条、三边 3px、页面区 1px 边线＋圆角 6；关闭键同标题栏右上角 */
+    #viewport .ws-scrim { position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .15s ease; }
+    #viewport .ws-scrim.in { opacity: 1; }
+    #viewport .ws { width: 446px; padding: 0 3px 3px; box-sizing: border-box; background: #f3f3f3; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.08); }
+    #viewport .ws .hd { height: ${BAR}px; display: flex; align-items: center; gap: 8px; padding-left: 9px; font-size: 12px; color: ${TOKENS.ink}; }
+    #viewport .ws .hd .bi { width: 16px; height: 16px; border-radius: 3px; flex: none; } #viewport .ws .hd .bi[hidden] { display: none; }
+    #viewport .ws .hd .src { color: ${TOKENS.ink3}; }
+    #viewport .ws .wsx { margin-left: auto; width: ${SPEC.caption.w}px; height: ${BAR}px; display: grid; place-items: center; color: var(--ink-2); position: relative; z-index: 0; }
+    #viewport .ws .wsx::before { content: ""; position: absolute; left: ${(SPEC.caption.w - SPEC.caption.pillW) / 2}px; right: ${(SPEC.caption.w - SPEC.caption.pillW) / 2}px; top: ${(SPEC.caption.h - SPEC.caption.pillH) / 2}px; bottom: ${(SPEC.caption.h - SPEC.caption.pillH) / 2}px; border-radius: 4px; z-index: -1; }
+    #viewport .ws .wsx:hover::before { background: rgba(0,0,0,.06); } #viewport .ws .wsx:active::before { background: rgba(0,0,0,.12); } #viewport .ws .wsx svg { width: 16px; height: 16px; }
+    #viewport .ws .page { height: min(600px, calc(100vh - ${BAR}px - ${BAR}px - 3px - 64px)); border: 1px solid #e3e3e5; border-radius: 6px; background: #fff; }
+    #viewport .dlg.qr .qst { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 18px; color: ${TOKENS.ink2}; } /* 永远一行（作者 10-21）：文案按 qr-copy.ts 的宽度预算写，不换行也不截断 */
+    #viewport .dlg.qr[data-stage="exchanging"] .qst { color: ${TOKENS.ok}; }
     /* 更新页状态块 */
     .pg .ulist { margin-top: 8px; } .pg .ustat.ready .uicon, .pg .ustat.available .uicon, .pg .ustat.downloading .uicon { color: ${TOKENS.ok}; } .pg .ustat.downloading .bar i { background: ${TOKENS.ok}; } .pg .tb.primary.ok { background: ${TOKENS.ok}; border-color: ${TOKENS.ok}; } .pg .tb.primary.ok:hover { background: #156a2e; border-color: #156a2e; } .pg .ustat { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid ${TOKENS.line}; } .pg .ustat:last-child { border-bottom: 0; } .pg .ustat .uicon { width: 36px; height: 36px; color: ${TOKENS.accent}; } .pg .ustat .uicon svg { width: 36px; height: 36px; stroke-width: 1.4; }
     .pg .ustat .utext { flex: 1; min-width: 0; } .pg .ustat .t { font-size: 15px; font-weight: 600; } .pg .ustat .d { color: ${TOKENS.ink2}; font-size: 12px; margin-top: 3px; display: flex; align-items: center; gap: 10px; } .pg .ustat .d a { color: ${TOKENS.accent}; cursor: pointer; }

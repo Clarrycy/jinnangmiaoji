@@ -1,23 +1,14 @@
 // 由 src/core/chrome/engine.ts 生成（node scripts/build-ts.js）；改源文件，不要改这里。
 "use strict";
 const BRAND_ICON = require("./brand-icons");
+const qrCopy = require("./qr-copy");
 const jsQR = require("jsqr");
 const qrcodegen = require("qrcode-generator");
 function mountChrome(opts) {
   const { S, ICON, SPEC, host } = opts;
-  const ENTRIES = ["官服", "4399", "飞火", "顺网", "2144", "紫霞", "QQ 大厅", "7K7K", "百度", "360"];
-  const PROVIDER_GROUPS = [
-    { label: "WeGame 登录", items: ["WeGame - QQ", "WeGame - 微信"] },
-    { label: "哔哩哔哩登录", items: ["bilibili 扫码登录"] },
-    { label: "Steam 登录", items: ["Steam 扫码登录", "Steam 官方登录"] },
-    { label: "OPPO 登录", items: ["OPPO 扫码登录", "OPPO 官方登录"] },
-    { label: "小米登录", items: ["小米扫码登录", "小米官方登录"] },
-    { label: "VIVO 登录", items: ["VIVO 扫码登录", "VIVO 官方登录"] },
-    { label: "华为登录", items: ["华为扫码登录"] },
-    { label: "荣耀登录", items: ["荣耀扫码登录"] }
-  ];
-  const PROVIDERS = PROVIDER_GROUPS.flatMap((group) => group.items);
-  const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录": "Steam", "OPPO 官方登录": "OPPO", "小米官方登录": "小米", "VIVO 官方登录": "VIVO" };
+  const ENTRIES = ["官服", "4399", "QQ 大厅", "百度", "360"];
+  const PROVIDERS = ["WeGame - QQ", "WeGame - 微信", "bilibili 扫码登录", "Steam 扫码登录", "OPPO 扫码登录", "小米扫码登录", "VIVO 扫码登录", "华为扫码登录", "荣耀扫码登录"];
+  const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "bilibili", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀" };
   const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
   const NICKS = ["范例玩家甲", "范例玩家乙", "范例玩家丙", "小号二", "小号三"];
   const settings = host.data.settings;
@@ -77,8 +68,11 @@ function mountChrome(opts) {
     w.tabs.splice(i, 1);
     w.tabs.splice(toIndex, 0, t);
   }
+  function freshTab() {
+    return makeTab({ entry: "官服", born: true });
+  }
   function newTabAfter(w, t) {
-    const n = makeTab({ entry: t.entry, provider: t.provider, born: true });
+    const n = freshTab();
     openTab(w, n, w.tabs.indexOf(t) + 1);
     return n;
   }
@@ -90,16 +84,23 @@ function mountChrome(opts) {
     if (settings.confirmClose && w.tabs.length >= 2) confirmCloseWindow(w.tabs.length, go);
     else go();
   }
+  const PASSIVE_COVER = /* @__PURE__ */ new Set(["tip", "toast", "leave", "web"]);
   const coverReasons = /* @__PURE__ */ new Set();
-  let coverSent = false;
+  let coverSent = false, keysSent = false, coverQueued = false;
   function setCover(reason, on) {
     if (on) coverReasons.add(reason);
     else coverReasons.delete(reason);
-    const full = coverReasons.size > 0;
-    if (full !== coverSent) {
-      coverSent = full;
-      host.cover?.(full);
-    }
+    if (coverQueued) return;
+    coverQueued = true;
+    queueMicrotask(() => {
+      coverQueued = false;
+      const full = coverReasons.size > 0, keys = [...coverReasons].some((r) => !PASSIVE_COVER.has(r));
+      if (full !== coverSent || keys !== keysSent) {
+        coverSent = full;
+        keysSent = keys;
+        host.cover?.(full, keys);
+      }
+    });
   }
   const chipWidthCache = {};
   let chipProbe = null;
@@ -152,7 +153,7 @@ function mountChrome(opts) {
   <div class="caption"><span class="more" data-tip="菜单" data-key="Alt+F">${S.menu}<span class="dot"></span></span><span class="mn" data-tip="最小化">${S.min}</span><span class="mx" data-tip="最大化">${S.max}</span><span class="cx" data-tip="关闭" data-key="Alt+F4">${S.x}</span></div>
 </header>
 <div id="viewport"><div class="game"></div><div class="pg" hidden></div></div>
-<div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div><div class="menu providermenu" hidden></div>
+<div class="menu entrymenu" hidden></div><div class="menu submenu" hidden></div>
 <div class="amenu" hidden><div class="item" data-act="pm"><i>${S.person}</i><span>账号</span><span class="hint">Ctrl+Shift+M</span></div><div class="item" data-act="settings"><i>${S.sliders}</i><span>设置</span><span class="hint">Ctrl+Shift+S</span></div><div class="sep"></div><div class="item" data-act="update"><i>${S.update}</i><span>更新</span><i class="dot2"></i></div><div class="item" data-act="about"><i>${S.info}</i><span>关于</span></div></div>`;
   const BORN_CLIP = `polygon(0 0, 100% 0, 100% calc(100% - ${SPEC.radius}px), calc(100% + ${SPEC.radius}px) calc(100% - ${SPEC.radius}px), calc(100% + ${SPEC.radius}px) 100%, -${SPEC.radius}px 100%, -${SPEC.radius}px calc(100% - ${SPEC.radius}px), 0 calc(100% - ${SPEC.radius}px))`;
   const TAB_GAME = `<i class="pill"></i><span class="sep"></span><img class="fav" src="${ICON}" draggable="false"><span class="entry" data-tip="切换渠道服"><span class="el"></span>${S.caret}</span><span class="t"></span><span class="snd" hidden></span><span class="x" data-tip="关闭" data-key="Ctrl+W">${S.close}</span>`;
@@ -202,7 +203,7 @@ function mountChrome(opts) {
         }, 1500);
       };
       q(el, ".newtab").onclick = () => {
-        openTab(w, makeTab({ entry: curTab(w).entry || "官服", provider: curTab(w).provider, born: true }));
+        openTab(w, freshTab());
         render(w);
       };
       q(el, ".tablist").onclick = (e) => {
@@ -219,10 +220,13 @@ function mountChrome(opts) {
       q(el, ".more").onclick = (e) => {
         e.stopPropagation();
         const m = q(el, ".amenu");
-        const open = m.hidden;
+        const open = m.hidden || leaving.has(m);
         closeAll();
-        m.hidden = !open;
-        setCover("menu", open);
+        if (open) {
+          cancelLeave(m);
+          m.hidden = false;
+          setCover("menu", true);
+        }
       };
       q(el, ".amenu").onclick = (e) => {
         e.stopPropagation();
@@ -573,11 +577,36 @@ function mountChrome(opts) {
       if (!s.moved && s.onClick) s.onClick();
     }
   };
+  const leaving = /* @__PURE__ */ new Map();
+  const MENU_SEL = ".menu,.amenu,.tlmenu";
+  function menusShowing() {
+    return [...document.querySelectorAll(MENU_SEL)].some((p) => !p.hidden && !leaving.has(p));
+  }
+  function cancelLeave(p) {
+    const t = leaving.get(p);
+    if (t === void 0) return;
+    clearTimeout(t);
+    leaving.delete(p);
+    p.classList.remove("leaving");
+    if (!leaving.size) setCover("leave", false);
+  }
+  function hideMenu(p) {
+    if (p.hidden || leaving.has(p)) return;
+    p.classList.add("leaving");
+    setCover("leave", true);
+    leaving.set(p, window.setTimeout(() => {
+      leaving.delete(p);
+      p.classList.remove("leaving");
+      p.hidden = true;
+      if (!leaving.size) setCover("leave", false);
+    }, 110));
+    if (!menusShowing()) setCover("menu", false);
+  }
   function closeAll() {
-    for (const p of document.querySelectorAll(".menu,.amenu,.tlmenu")) p.hidden = true;
+    for (const p of document.querySelectorAll(MENU_SEL)) hideMenu(p);
     for (const t of document.querySelectorAll(".tab.ctx")) t.classList.remove("ctx");
     document.querySelectorAll(".entry.open,.ib.s.op.open").forEach((x) => x.classList.remove("open"));
-    setCover("menu", false);
+    if (!menusShowing()) setCover("menu", false);
   }
   function menuItem(label, onClick, extra = {}) {
     const d = document.createElement("div");
@@ -601,8 +630,8 @@ function mountChrome(opts) {
     const el = winEl(w), a = q(el, ".tab.on .entry");
     if (!a) return;
     a.classList.add("open");
-    const m = q(el, ".entrymenu"), sub = q(el, ".submenu"), methods = q(el, ".providermenu"), r = a.getBoundingClientRect(), wr = el.getBoundingClientRect();
-    let subOpen = false, groupOpen = t.provider ? PROVIDER_GROUPS.find((group) => group.items.includes(t.provider))?.label || null : null;
+    const m = q(el, ".entrymenu"), sub = q(el, ".submenu"), r = a.getBoundingClientRect(), wr = el.getBoundingClientRect();
+    let subOpen = false;
     const draw = () => {
       m.textContent = "";
       const loggedIn = () => Boolean(t.status && t.status !== "none");
@@ -628,9 +657,7 @@ function mountChrome(opts) {
       const sep = document.createElement("div");
       sep.className = "sep";
       m.append(sep);
-      const providerName = t.provider ? PROVIDER_CHIP[t.provider] || t.provider : "";
-      const providerAction = t.provider ? /官方登录/.test(t.provider) ? " 登录" : " 扫码" : "";
-      const other = menuItem(t.provider ? providerName + providerAction : "其他渠道服", () => {
+      const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] : "其他渠道服", () => {
         subOpen = !subOpen;
         draw();
       }, { sub: true, open: subOpen });
@@ -641,9 +668,10 @@ function mountChrome(opts) {
         }
       };
       m.append(other);
-      sub.hidden = !subOpen;
-      methods.hidden = true;
-      methods.textContent = "";
+      if (subOpen) {
+        cancelLeave(sub);
+        sub.hidden = false;
+      } else hideMenu(sub);
       const pickProvider = (p, logout) => {
         t.provider = p;
         t.entry = PROVIDER_CHIP[p];
@@ -656,38 +684,18 @@ function mountChrome(opts) {
           qrPrompt({ provider: p, stage: "loading", qr: "", text: "" });
         }
       };
-      if (!subOpen) return;
-      sub.textContent = "";
-      let activeGroup = null;
-      for (const group2 of PROVIDER_GROUPS) {
-        const item = menuItem(group2.label, () => {
-          groupOpen = groupOpen === group2.label ? null : group2.label;
-          draw();
-        }, { sub: true, open: groupOpen === group2.label });
-        item.onmouseenter = () => {
-          if (groupOpen !== group2.label) {
-            groupOpen = group2.label;
-            draw();
-          }
-        };
-        sub.append(item);
-        if (groupOpen === group2.label) activeGroup = item;
+      if (subOpen) {
+        sub.textContent = "";
+        for (const p of PROVIDERS) sub.append(menuItem(p, () => {
+          closeAll();
+          if (loggedIn()) dialog({ title: "切换登录方式？", body: "切换服务器会退出当前账号，确定要切换吗？", cancel: "取消", ok: "切换登录方式", onOk: () => pickProvider(p, true) });
+          else pickProvider(p, false);
+        }, { checked: t.provider === p }));
+        sub.style.left = r.left - wr.left - 8 + 176 + 2 + "px";
+        sub.style.top = r.bottom - wr.top + 2 + other.offsetTop + "px";
       }
-      const subLeft = r.left - wr.left - 8 + 176 + 2, subTop = r.bottom - wr.top + 2 + other.offsetTop;
-      sub.style.left = subLeft + "px";
-      sub.style.top = subTop + "px";
-      const group = PROVIDER_GROUPS.find((entry) => entry.label === groupOpen);
-      if (!group || !activeGroup) return;
-      for (const p of group.items) methods.append(menuItem(p, () => {
-        closeAll();
-        if (loggedIn()) dialog({ title: "切换登录方式？", body: "切换服务器会退出当前账号，确定要切换吗？", cancel: "取消", ok: "切换登录方式", onOk: () => pickProvider(p, true) });
-        else pickProvider(p, false);
-      }, { checked: t.provider === p }));
-      methods.hidden = false;
-      const desiredLeft = subLeft + (sub.offsetWidth || 184) + 2, maxLeft = Math.max(4, wr.width - (methods.offsetWidth || 176) - 4);
-      methods.style.left = Math.min(desiredLeft, maxLeft) + "px";
-      methods.style.top = subTop + activeGroup.offsetTop + "px";
     };
+    cancelLeave(m);
     draw();
     m.hidden = false;
     m.style.left = r.left - wr.left - 8 + "px";
@@ -772,6 +780,7 @@ function mountChrome(opts) {
         fn();
       }, { disabled }));
     }
+    cancelLeave(m);
     m.hidden = false;
     m.style.left = Math.min(x - wr.left, wr.width - 218) + "px";
     m.style.top = y - wr.top + "px";
@@ -780,7 +789,7 @@ function mountChrome(opts) {
   function toggleTabList(w) {
     const el = winEl(w);
     const m = q(el, ".tlmenu");
-    const open = m && !m.hidden;
+    const open = m && !m.hidden && !leaving.has(m);
     closeAll();
     if (open) return;
     fillTabList(w);
@@ -798,6 +807,7 @@ function mountChrome(opts) {
       m.hidden = true;
       return;
     }
+    cancelLeave(m);
     m.textContent = "";
     m.hidden = false;
     setCover("menu", true);
@@ -900,7 +910,7 @@ function mountChrome(opts) {
     if (!w) return;
     const t = curTab(w);
     if (name === "newTab") {
-      openTab(w, makeTab({ entry: t.entry || "官服", provider: t.provider, born: true }));
+      openTab(w, freshTab());
       render(w);
     } else if (name === "closeTab") {
       removeTab(w, t);
@@ -915,6 +925,8 @@ function mountChrome(opts) {
     } else if (name === "tabList") {
       if (hasList(w)) toggleTabList(w);
     } else if (name === "menu") q(winEl(w), ".more").click();
+    else if (name === "fullscreen") host.window?.command("fullscreen");
+    else if (name === "recorder") host.window?.command("recorder");
     else if (name === "pm" || name === "settings" || name === "update" || name === "about") {
       closeAll();
       openPage(w, name);
@@ -927,6 +939,7 @@ function mountChrome(opts) {
   }
   function shortcutOf(e) {
     const k = e.key.toLowerCase(), c = e.ctrlKey || e.metaKey;
+    if (c && e.shiftKey && e.altKey && e.code === "KeyR") return "recorder";
     if (c && e.shiftKey && k === "a") return "tabList";
     if (c && e.shiftKey && k === "m") return "pm";
     if (c && e.shiftKey && k === "s") return "settings";
@@ -938,6 +951,9 @@ function mountChrome(opts) {
     if (e.altKey && k === "f") return "menu";
     if (e.altKey && e.key === "ArrowLeft") return "back";
     if (e.altKey && e.key === "ArrowRight") return "fwd";
+    if (e.key === "F11" && !document.body.classList.contains("mac")) return "fullscreen";
+    if (document.body.classList.contains("mac") && e.ctrlKey && e.metaKey && k === "f") return "fullscreen";
+    if (e.key === "Escape" && !c && document.body.classList.contains("full") && !document.querySelector(".scrim, .save, .menu:not([hidden]), .amenu:not([hidden]), .tlmenu:not([hidden])")) return "fullscreen";
     return null;
   }
   document.addEventListener("keydown", (e) => {
@@ -1186,7 +1202,11 @@ function mountChrome(opts) {
   }
   function dialog(o) {
     const vp = document.querySelector(".win #viewport");
-    vp.querySelector(".scrim")?.remove();
+    const prev = vp.querySelector(".scrim:not(.qr-scrim)");
+    if (prev) {
+      if (prev._dispose) prev._dispose();
+      else prev.remove();
+    }
     const scrim = document.createElement("div");
     scrim.className = "scrim";
     scrim.innerHTML = '<div class="dlg" role="dialog"><h3></h3><p></p><label class="dchk" hidden><input type="checkbox"><span></span></label><textarea class="dnote" hidden rows="3"></textarea><div class="acts"><button class="tb"></button><button class="tb primary"></button></div></div>';
@@ -1213,8 +1233,12 @@ function mountChrome(opts) {
       document.removeEventListener("keydown", onKey);
       setTimeout(() => {
         scrim.remove();
-        if (!document.querySelector(".scrim")) setCover("dialog", false);
+        if (!document.querySelector(".scrim:not(.qr-scrim)")) setCover("dialog", false);
       }, 160);
+    };
+    scrim._dispose = () => {
+      document.removeEventListener("keydown", onKey);
+      scrim.remove();
     };
     const onKey = (e) => {
       if (e.key === "Escape") close();
@@ -1238,29 +1262,26 @@ function mountChrome(opts) {
       (o.note !== void 0 ? note : dlgEl).focus();
     });
   }
-  let qrEl = null;
-  let qrCancelCb = null;
-  let qrRetryCb = null;
-  let qrTab = null;
-  let qrYield = false;
+  const qrCards = /* @__PURE__ */ new Map();
+  let qrClosing = 0;
+  function qrCoverSync() {
+    setCover("qr", qrClosing > 0 || [...qrCards.values()].some((c) => !c.el.hidden));
+  }
   function syncCardTabs(w) {
-    if (qrEl) qrEl.hidden = qrYield || qrTab !== null && qrTab !== w.cur;
-    if (saveEl) saveEl.hidden = saveTab !== null && saveTab !== w.cur;
+    for (const c of qrCards.values()) c.el.hidden = c.yielded || c.webOpen || c.tab !== null && c.tab !== w.cur;
+    qrCoverSync();
+    if (saveEl) {
+      saveEl.hidden = saveTab !== null && saveTab !== w.cur;
+      setCover("save", !saveEl.hidden);
+    }
   }
-  const QR_APP = { "WeGame - QQ": "QQ", "WeGame - 微信": "微信", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀", "Steam 官方登录": "Steam", "OPPO 官方登录": "OPPO", "小米官方登录": "小米", "VIVO 官方登录": "VIVO" };
-  function qrTexts(m) {
-    const app = m.brand || QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, "");
-    const sp = /^[A-Za-z]/.test(app) ? ` ${app} ` : app;
-    if (m.stage === "loading") return [m.mode === "browser" ? m.text || "正在打开官方登录窗口" : "正在获取二维码", m.mode === "browser" ? "账号密码、验证码只输入渠道官方页面" : ""];
-    if (m.stage === "scan") return [m.mode === "browser" ? m.text || `请在${sp}官方窗口完成登录` : `用手机${sp}扫码`, m.mode === "browser" ? "完成后会自动继续，不需要回到本窗口" : "扫码后在手机上确认登录"];
-    if (m.stage === "confirm") return ["已扫码", "请在手机上确认登录"];
-    if (m.stage === "exchanging") return ["正在登录", ""];
-    if (m.stage === "error") return [m.text || "登录未完成", m.mode === "browser" ? "点击此处重新打开官方登录窗口" : "点击二维码重新获取"];
-    return ["", ""];
-  }
+  const winOfTab = (tab) => wins.find((x) => x.tabs.some((t) => t.id === tab)) || wins[0];
+  document.addEventListener("keydown", onQrKey);
+  const { qrSteps } = qrCopy;
   const qrCache = /* @__PURE__ */ new Map();
   function normalizeQr(src) {
-    if (qrCache.has(src)) return qrCache.get(src);
+    const key = src;
+    if (qrCache.has(key)) return qrCache.get(key);
     const p = new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
@@ -1285,7 +1306,7 @@ function mountChrome(opts) {
           const q2 = qrcodegen(0, "M");
           q2.addData(r.data);
           q2.make();
-          const n = q2.getModuleCount(), quiet = 3, scale = Math.max(2, Math.floor(496 / (n + quiet * 2)));
+          const n = q2.getModuleCount(), quiet = 3, scale = Math.max(2, Math.floor(352 / (n + quiet * 2)));
           const size = (n + quiet * 2) * scale;
           const o = document.createElement("canvas");
           o.width = o.height = size;
@@ -1302,93 +1323,231 @@ function mountChrome(opts) {
       img.onerror = () => resolve(src);
       img.src = src;
     });
-    qrCache.set(src, p);
+    qrCache.set(key, p);
     return p;
   }
-  function closeQr() {
-    const el = qrEl;
-    if (!el) return;
-    qrEl = null;
-    qrCancelCb = null;
-    qrRetryCb = null;
-    qrTab = null;
+  function qrHeader(el, provider) {
+    if (el.dataset.provider === provider) return;
+    el.dataset.provider = provider;
+    q(el, "h3").textContent = provider.replace(/ ?扫码登录$/, "").replace(" - ", " · ");
+    const bi = q(el, ".bi");
+    const icon = BRAND_ICON[provider];
+    if (icon) {
+      bi.src = icon;
+      bi.hidden = false;
+    } else {
+      bi.removeAttribute("src");
+      bi.hidden = true;
+    }
+  }
+  function closeQr(tabId) {
+    const key = tabId ?? null;
+    const card = qrCards.get(key);
+    if (!card) return;
+    qrCards.delete(key);
+    const el = card.el;
+    el.classList.add("closing");
     el.classList.remove("in");
-    document.removeEventListener("keydown", onQrKey);
+    qrClosing += 1;
     setTimeout(() => {
       el.remove();
-      if (!document.querySelector(".scrim")) setCover("dialog", false);
-    }, 160);
+      qrClosing -= 1;
+      qrCoverSync();
+    }, 240);
   }
   function onQrKey(e) {
-    if (e.key === "Escape") {
-      const cb = qrCancelCb;
-      closeQr();
-      cb?.();
-    }
+    if (e.key !== "Escape" || document.querySelector(".scrim:not(.qr-scrim)")) return;
+    const card = [...qrCards.values()].find((c) => !c.el.hidden);
+    if (!card) return;
+    const cb = card.cancel;
+    closeQr(card.tab ?? void 0);
+    cb?.();
   }
-  function updateQr(m) {
-    const el = qrEl;
-    if (!el) return;
-    qrYield = m.stage === "yield";
-    const w0 = wins.find((x) => x.tabs.some((t) => t.id === qrTab)) || wins[0];
-    if (w0) syncCardTabs(w0);
-    if (qrYield) return;
+  function updateQr(m, tabId) {
+    const card = qrCards.get(tabId ?? null);
+    if (!card) return;
+    const el = card.el;
+    card.yielded = m.stage === "yield";
+    syncCardTabs(winOfTab(card.tab));
+    if (card.yielded) return;
+    qrHeader(el, m.provider);
+    const live = () => qrCards.get(card.tab) === card;
     const img = q(el, ".qrbox img");
-    const box = q(el, ".qrbox");
-    if (m.qr) {
-      if (img.dataset.src !== m.qr) {
-        img.dataset.src = m.qr;
-        img.src = m.qr;
-        normalizeQr(m.qr).then((u) => {
-          if (img.dataset.src === m.qr) img.src = u;
-        });
-      }
-      img.hidden = false;
-    } else {
+    const qrbox = img.parentElement;
+    if (m.qr && img.dataset.src !== m.qr) {
+      qrbox.classList.remove("has-qr");
       img.hidden = true;
       img.removeAttribute("src");
+      img.dataset.src = m.qr;
+      normalizeQr(m.qr).then((u) => {
+        if (!live() || img.dataset.src !== m.qr) return;
+        img.onload = () => {
+          if (!live() || img.dataset.src !== m.qr) return;
+          img.hidden = false;
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (live() && img.dataset.src === m.qr) {
+              qrbox.classList.add("has-qr");
+              card.qrShown = (card.qrShown || 0) + 1;
+              const wb = q(el, ".wl");
+              if (!wb.hidden && card.qrShown > 1) armWeb(wb);
+            }
+          }));
+        };
+        img.src = u;
+      });
+    } else if (!m.qr && img.dataset.src) {
       delete img.dataset.src;
+      qrbox.classList.remove("has-qr");
+      setTimeout(() => {
+        if (!img.dataset.src) {
+          img.hidden = true;
+          img.removeAttribute("src");
+        }
+      }, 240);
     }
-    const [t1, t2] = qrTexts(m);
-    q(el, ".qst").textContent = t1;
-    q(el, ".qsub").textContent = t2;
+    const sm = qrSteps(m);
+    const lis = el.querySelectorAll(".steps li");
+    sm.steps.forEach((t, i) => {
+      const li = lis[i];
+      const span = li.querySelector("span"), mark = li.querySelector("i");
+      if (li.className !== sm.state[i]) li.className = sm.state[i];
+      if (span.textContent !== t) span.textContent = t;
+      const markHtml = sm.state[i] === "done" ? S.check : sm.state[i] === "busy" ? "" : String(i + 1);
+      if (mark.dataset.v !== markHtml) {
+        mark.dataset.v = markHtml;
+        mark.innerHTML = markHtml;
+      }
+    });
+    const inTile = TILE_STAGES.has(m.stage);
+    const ovt = q(el, ".ovt");
+    const ovtText = inTile && m.stage !== "error" ? sm.foot : "";
+    if (ovt.textContent !== ovtText) ovt.textContent = ovtText;
+    const why = q(el, ".rb span");
+    const whyText = m.stage === "error" ? sm.foot || qrCopy.RETRY_ACTION : qrCopy.RETRY_ACTION;
+    if (why.textContent !== whyText) why.textContent = whyText;
+    const footText = inTile ? "" : sm.foot;
+    const wl = q(el, ".wl");
+    const showWeb = Boolean(card.web) && WEB_LOGIN_PROVIDERS.has(m.provider) && WEB_FALLBACK_STAGES.has(m.stage);
+    if (wl.hidden === showWeb) {
+      wl.hidden = !showWeb;
+      if (showWeb) armWeb(wl);
+    }
+    const foot = q(el, ".qst");
+    if (foot.textContent !== footText) {
+      foot.getAnimations().forEach((a) => a.cancel());
+      foot.textContent = footText;
+      if (footText) foot.animate([{ opacity: 0, transform: "translateY(3px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 220, easing: "ease-out" });
+    }
     q(el, ".dlg").dataset.stage = m.stage;
-    box.classList.toggle("act", m.stage === "error");
   }
-  function qrPrompt(m, onCancel, onRetry, tabId) {
+  const WEB_LOGIN_PROVIDERS = /* @__PURE__ */ new Set(["Steam 扫码登录", "OPPO 扫码登录", "VIVO 扫码登录", "小米扫码登录", "WeGame - QQ", "华为扫码登录", "荣耀扫码登录"]);
+  const WEB_FALLBACK_STAGES = /* @__PURE__ */ new Set(["loading", "retrying", "scan", "error"]);
+  const TILE_STAGES = /* @__PURE__ */ new Set(["loading", "retrying", "error"]);
+  const WEB_ARM_MS = 500;
+  function armWeb(b) {
+    clearTimeout(b._arm);
+    b.classList.add("arming");
+    b._arm = setTimeout(() => b.classList.remove("arming"), WEB_ARM_MS);
+  }
+  let webSheetEl = null;
+  let webSheetOff = null;
+  function webSheet(tabId, opts2, onRect, onClose) {
+    const card = qrCards.get(tabId);
+    if (!opts2) {
+      webSheetOff?.();
+      webSheetOff = null;
+      const el2 = webSheetEl;
+      webSheetEl = null;
+      if (el2) {
+        el2.classList.remove("in");
+        setTimeout(() => el2.remove(), 160);
+      }
+      if (card) {
+        card.webOpen = false;
+        syncCardTabs(winOfTab(tabId));
+      }
+      setCover("web", false);
+      return;
+    }
     const vp = document.querySelector(".win #viewport");
-    closeQr();
-    vp.querySelector(".scrim")?.remove();
-    qrTab = tabId ?? null;
-    qrYield = false;
-    const scrim = document.createElement("div");
-    scrim.className = "scrim center";
-    scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><div class="qrbox"><img alt="" hidden><div class="ov"><i class="spin"></i><i class="ok">${S.check}</i><i class="again">${S.refresh || S.update || ""}</i></div></div><div class="qst"></div><div class="qsub"></div></div>`;
-    q(scrim, "h3").textContent = (m.brand || m.provider).replace(/ ?扫码登录$/, "").replace(" - ", " · ");
-    const bi = q(scrim, ".bi");
-    const icon = BRAND_ICON[m.provider] || (m.brand ? BRAND_ICON[m.brand] : "");
+    if (!vp) return;
+    webSheetEl?.remove();
+    webSheetOff?.();
+    const el = document.createElement("div");
+    el.className = "ws-scrim";
+    el.innerHTML = `<div class="ws" role="dialog"><div class="hd"><img class="bi" alt="" hidden><span class="t"></span><span class="src">官方网页</span><span class="wsx" data-tip="关闭" data-key="Esc">${S.close}</span></div><div class="page"></div></div>`;
+    q(el, ".t").textContent = opts2.title;
+    if (opts2.width && opts2.width !== 440) q(el, ".ws").style.width = `${opts2.width + 6}px`;
+    const icon = BRAND_ICON[opts2.provider || ""];
+    const bi = q(el, ".bi");
     if (icon) {
       bi.src = icon;
       bi.hidden = false;
     }
+    q(el, ".wsx").onclick = (e) => {
+      e.stopPropagation();
+      onClose?.();
+    };
+    vp.append(el);
+    webSheetEl = el;
+    if (card) {
+      card.webOpen = true;
+      syncCardTabs(winOfTab(tabId));
+    }
+    setCover("web", true);
+    const report = () => {
+      const r = q(el, ".page").getBoundingClientRect();
+      if (r.height > 80) onRect?.({ x: r.left + 1, y: r.top + 1, w: r.width - 2, h: r.height - 2 });
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose?.();
+      }
+    };
+    window.addEventListener("resize", report);
+    document.addEventListener("keydown", onKey);
+    webSheetOff = () => {
+      window.removeEventListener("resize", report);
+      document.removeEventListener("keydown", onKey);
+    };
+    requestAnimationFrame(() => {
+      el.classList.add("in");
+      report();
+    });
+  }
+  function qrPrompt(m, onCancel, onRetry, tabId, onWeb) {
+    const vp = document.querySelector(".win #viewport");
+    const key = tabId ?? null;
+    const old = qrCards.get(key);
+    if (old) {
+      qrCards.delete(key);
+      old.el.remove();
+    }
+    const scrim = document.createElement("div");
+    scrim.className = "scrim center qr-scrim";
+    scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><button class="tb wl" type="button" hidden>${S.arrowUpRight}<span>使用网页登录</span></button><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i><span class="ovt"></span></div><div class="retry"><button class="rb" type="button" aria-label="${qrCopy.RETRY_ACTION}">${S.refresh || S.update || ""}<span></span></button></div></div></div>`;
+    const card = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false, web: onWeb || null, webOpen: false };
+    q(scrim, ".wl").onclick = (e) => {
+      e.stopPropagation();
+      card.web?.();
+    };
     const cancel = () => {
-      const cb = qrCancelCb;
-      closeQr();
+      const cb = card.cancel;
+      closeQr(tabId);
       cb?.();
     };
-    q(scrim, ".qrbox").onclick = () => {
-      if (q(scrim, ".dlg").dataset.stage === "error") qrRetryCb?.();
+    q(scrim, ".rb span").textContent = qrCopy.RETRY_ACTION;
+    q(scrim, ".rb").onclick = (e) => {
+      e.stopPropagation();
+      if (q(scrim, ".dlg").dataset.stage === "error") card.retry?.();
     };
     scrim.onclick = (e) => {
       if (e.target === scrim) cancel();
     };
-    qrEl = scrim;
-    qrCancelCb = onCancel || null;
-    qrRetryCb = onRetry || null;
-    vp.append(scrim);
-    setCover("dialog", true);
-    document.addEventListener("keydown", onQrKey);
-    updateQr(m);
+    qrCards.set(key, card);
+    vp.insertBefore(scrim, vp.querySelector(".scrim:not(.qr-scrim)"));
+    updateQr(m, tabId);
     const dlgEl = q(scrim, ".dlg");
     dlgEl.tabIndex = -1;
     requestAnimationFrame(() => {
@@ -1825,6 +1984,7 @@ function mountChrome(opts) {
     }
     anchor.classList.add("open");
     const r = anchor.getBoundingClientRect(), wr = el.getBoundingClientRect();
+    cancelLeave(m);
     m.hidden = false;
     m.style.left = r.right - 7 - wr.left - m.offsetWidth + "px";
     m.style.top = r.bottom - wr.top + 6 + "px";
@@ -1918,14 +2078,18 @@ function mountChrome(opts) {
     }
     if (kind === "closed") for (const w of wins) render(w);
   }
+  const winState = { maximized: false, fullscreen: false };
   function setWindow(state) {
-    for (const w of wins) {
-      const el = winEl(w);
-      if (state.maximized !== void 0) {
-        const mx = q(el, ".caption .mx");
-        mx.innerHTML = state.maximized ? S.restore : S.max;
-        mx.dataset.tip = state.maximized ? "向下还原" : "最大化";
-      }
+    if (state.maximized !== void 0) winState.maximized = Boolean(state.maximized);
+    if (state.fullscreen !== void 0) {
+      winState.fullscreen = Boolean(state.fullscreen);
+      document.body.classList.toggle("full", winState.fullscreen);
+    }
+    if (state.maximized !== void 0 || state.fullscreen !== void 0) for (const w of wins) {
+      const mx = q(winEl(w), ".caption .mx");
+      const restore = winState.fullscreen || winState.maximized;
+      mx.innerHTML = restore ? S.restore : S.max;
+      mx.dataset.tip = winState.fullscreen ? "退出全屏" : winState.maximized ? "向下还原" : "最大化";
     }
     if (state.focused !== void 0) document.body.classList.toggle("inactive", !state.focused);
   }
@@ -1956,6 +2120,6 @@ function mountChrome(opts) {
     openTab(w, makeTab({ entry: info.entry, provider: info.provider || null, nick: info.nick || "", muted: Boolean(info.muted), born: true }), idx, { slot: info.slot, adopt: true });
     render(w);
   }
-  return { wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
+  return { webSheet, wins, makeWin, makeTab, insertTab, openTab, removeTab, curTab, render, renderAll, openPage, toast, dialog, confirmCloseWindow, confirmLogoutAll, openTabMenu, openEntryMenu, toggleTabList, installPluginDialog, closeAll, command, updateTab, setData, setWindow, setSize, requestClose, savePrompt, closeSave, qrPrompt, updateQr, closeQr, adoptAt };
 }
 module.exports = mountChrome;

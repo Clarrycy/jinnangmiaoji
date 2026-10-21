@@ -11,7 +11,7 @@ function parseHeader(code) {
   const header = String(code || "").split("// ==/UserScript==", 1)[0];
   const all = (key) => [...header.matchAll(new RegExp(`^\\/\\/\\s*@${key}\\s+(\\S.*?)\\s*$`, "gm"))].map((m) => m[1]);
   const grants = all("grant").filter((g) => g !== "none");
-  return { ...base, match: [...all("match"), ...all("include")], grant: grants.length > 0, updateUrl: all("updateURL")[0] || all("downloadURL")[0] || "" };
+  return { ...base, match: [...all("match"), ...all("include")], exclude: all("exclude"), grant: grants.length > 0, updateUrl: all("updateURL")[0] || all("downloadURL")[0] || "" };
 }
 function globToRegExp(glob) {
   const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
@@ -174,7 +174,7 @@ function createPluginStore(options) {
         if (!m.enabled) continue;
         const code = readCode(m.id);
         if (!code) continue;
-        result[m.id] = { id: m.id, name: m.name, version: m.version, code, match: m.match, gm: m.grant, connect: m.connect, source: "plugin" };
+        result[m.id] = { id: m.id, name: m.name, version: m.version, code, match: m.match, exclude: parseHeader(code).exclude, gm: m.grant, connect: m.connect, source: "plugin" };
       }
       return result;
     }

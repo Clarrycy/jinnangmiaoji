@@ -10,42 +10,16 @@ const ENTRIES = Object.freeze([
     verified: true,
     matches: isOfficial
   }),
+  // 4399（作者 10-21）：原入口 wd-home 是 4399 自家微端用的页面，整页写死 1024×753，在壳里只占一小块；改用 4399 三国杀官网（1200 宽、首屏铺满、一将成名与 OL 两个开始游戏）。
+  // 官网的开始游戏走普通跳转（新窗口请求由壳载入当前标签）；wd-home 的 app:// 协议照旧保留处理。
   Object.freeze({
     id: "4399",
     label: "4399",
     hostChannel: "4399-new",
     appNavigation: true,
-    entry: "https://my.4399.com/yxxsgs/wd-home",
+    entry: "https://my.4399.com/yxsgs/",
     verified: true,
     matches: (url) => /(^|\.)(?:4399iw\d*|iwan4399)\.com$/i.test(url.hostname) && /\/yxxsgs(?:\/|$)/i.test(url.pathname) || isOfficial(url)
-  }),
-  Object.freeze({
-    id: "feihuo",
-    label: "飞火",
-    entry: "https://www.feihuo.com/game/index/slug/xsgs",
-    verified: false,
-    matches: (url) => /(^|\.)feihuo\.com$/i.test(url.hostname) || isOfficial(url)
-  }),
-  Object.freeze({
-    id: "shunwang",
-    label: "顺网",
-    entry: "https://sgs.swjoy.com/",
-    verified: false,
-    matches: (url) => /(^|\.)swjoy\.com$/i.test(url.hostname) || isOfficial(url)
-  }),
-  Object.freeze({
-    id: "2144",
-    label: "2144",
-    entry: "https://web.2144.cn/hlsgs",
-    verified: false,
-    matches: (url) => /(^|\.)2144\.cn$/i.test(url.hostname) || isOfficial(url)
-  }),
-  Object.freeze({
-    id: "zixia",
-    label: "紫霞",
-    entry: "https://game.zixia.com/game-xsgs",
-    verified: false,
-    matches: (url) => /(^|\.)zixia\.com$/i.test(url.hostname) || isOfficial(url)
   }),
   Object.freeze({
     id: "qqgame",
@@ -54,84 +28,62 @@ const ENTRIES = Object.freeze([
     verified: false,
     matches: (url) => /(^|\.)qqopenapp\.com$/i.test(url.hostname) && /\/pc\/qqLobby_index\.php/i.test(url.pathname)
   }),
+  // 百度（作者 10-21）：原入口 /game?gameId= 就是游戏页本身（空页＋游戏 iframe，要登录才填），关掉登录框就一直空着；
+  // 改用详情落地页 /gamedetail（「三国杀：一将成名-百度页游中心」：登录、选区进入游戏、公告）。游戏页只认 /game 这一个路径，落地页不注入。
+  Object.freeze({
+    id: "baidu",
+    label: "百度",
+    entry: "https://wan.baidu.com/gamedetail?gameId=19793616",
+    verified: false,
+    matches: (url) => /(^|\.)wan\.baidu\.com$/i.test(url.hostname) && url.pathname === "/game" && /gameId=19793616/.test(url.search) || isOfficial(url)
+  }),
+  // 360（作者 10-21）：game_login.php 未登录时跳回门户首页 index.html；原来整个域名都算游戏页，锦囊袋被注进了门户首页。
+  // 入口不变（已登录直接进游戏、未登录落到门户），游戏页只认 /game_login.php。
+  Object.freeze({
+    id: "360",
+    label: "360",
+    entry: "https://sgsszn.wan.360.cn/game_login.php",
+    verified: false,
+    matches: (url) => /(^|\.)sgsszn\.wan\.360\.cn$/i.test(url.hostname) && url.pathname === "/game_login.php" || isOfficial(url)
+  })
+]);
+const RETIRED_ENTRIES = Object.freeze([
   Object.freeze({
     id: "7k7k",
     label: "7K7K",
     entry: "https://h5.7k7k.com/game/960982bec2f555de44ea43ca8a7ef418",
     verified: false,
     // 原 web/H5GAMES.html 包装页在没有 7K7K 登录 cookie 时跳 /mb/.html 必 404；游戏页本身自带登录
-    matches: (url) => /(^|\.)7k7k\.com$/i.test(url.hostname) || isOfficial(url)
-  }),
-  Object.freeze({
-    id: "baidu",
-    label: "百度",
-    entry: "https://wan.baidu.com/game?gameId=19793616",
-    verified: false,
-    matches: (url) => /(^|\.)wan\.baidu\.com$/i.test(url.hostname) && /gameId=19793616/.test(url.search) || isOfficial(url)
-  }),
-  Object.freeze({
-    id: "360",
-    label: "360",
-    entry: "https://sgsszn.wan.360.cn/game_login.php",
-    verified: false,
-    matches: (url) => /(^|\.)sgsszn\.wan\.360\.cn$/i.test(url.hostname) || isOfficial(url)
+    // 收窄（作者 10-21）：/game/<gid> 是 7K7K 自家门户/详情页（移动 H5，带广告与适龄角标），不是游戏画布。
+    // 把它排除出游戏匹配，归为落地页走缩放/滚动/减法管线；真正的游戏画布（7K7K 其余路径或官方 /x|10|10th/pc）仍算游戏页。游戏画布路径未实机核实，待运行时验收。
+    matches: (url) => /(^|\.)7k7k\.com$/i.test(url.hostname) && !/^\/game(?:\/|$)/i.test(url.pathname) || isOfficial(url)
   })
 ]);
 const PROVIDERS = Object.freeze([
-  Object.freeze({ id: "qq", provider: "qq", label: "WeGame - QQ", mode: "qr", brand: "WeGame", group: "WeGame 登录" }),
-  Object.freeze({ id: "wx", provider: "wx", label: "WeGame - 微信", mode: "qr", brand: "WeGame", group: "WeGame 登录" }),
-  Object.freeze({ id: "bilibili", provider: "bilibili", label: "bilibili 扫码登录", mode: "qr", brand: "哔哩哔哩", group: "哔哩哔哩登录" }),
-  Object.freeze({ id: "steam", provider: "steam", label: "Steam 扫码登录", mode: "qr", brand: "Steam", group: "Steam 登录" }),
-  Object.freeze({
-    id: "steam-web",
-    provider: "steam",
-    label: "Steam 官方登录",
-    mode: "browser",
-    brand: "Steam",
-    group: "Steam 登录",
-    page: "https://store.steampowered.com/oauth/login?mobileminimal=1&response_type=token&client_id=6730F3F4&state={state}"
-  }),
-  Object.freeze({ id: "oppo", provider: "oppo", label: "OPPO 扫码登录", mode: "qr", brand: "OPPO", group: "OPPO 登录" }),
-  Object.freeze({
-    id: "oppo-web",
-    provider: "oppo",
-    label: "OPPO 官方登录",
-    mode: "browser",
-    brand: "OPPO",
-    group: "OPPO 登录",
-    page: "https://id.heytap.com/identity/web/v1/authn/auth-and-callback?bizAppKey=2CcnddQwhZJV3qjNMCzL4S&callback=https%3A%2F%2Fgame-login.heytap.com%2Fgame-union-h5%2Fh5%2Fclient-login%2Findex.html%3Fh5-next%3D1%26actId%3D90000016%26bizType%3Die&language=zh-CN&toRegisterPage=false"
-  }),
-  Object.freeze({ id: "xiaomi", provider: "xiaomi", label: "小米扫码登录", mode: "qr", brand: "小米", group: "小米登录" }),
-  Object.freeze({
-    id: "xiaomi-web",
-    provider: "xiaomi",
-    label: "小米官方登录",
-    mode: "browser",
-    brand: "小米",
-    group: "小米登录",
-    page: "https://account.xiaomi.com/oauth2/authorize?client_id=2882303761517516898&response_type=code&scope=1%203&redirect_uri=http%3A%2F%2Fgame.xiaomi.com%2Foauthcallback%2Fmioauth&state={state}&_locale=zh_CN&skip_confirm=false"
-  }),
-  Object.freeze({ id: "vivo", provider: "vivo", label: "VIVO 扫码登录", mode: "qr", brand: "VIVO", group: "VIVO 登录" }),
-  Object.freeze({
-    id: "vivo-web",
-    provider: "vivo",
-    label: "VIVO 官方登录",
-    mode: "browser",
-    brand: "VIVO",
-    group: "VIVO 登录",
-    page: "https://joint.vivo.com.cn/game-subaccount-login/?from=login"
-  }),
-  Object.freeze({ id: "huawei", provider: "huawei", label: "华为扫码登录", mode: "qr", brand: "华为", group: "华为登录" }),
-  Object.freeze({ id: "honor", provider: "honor", label: "荣耀扫码登录", mode: "qr", brand: "荣耀", group: "荣耀登录" })
+  Object.freeze({ id: "qq", label: "WeGame - QQ" }),
+  Object.freeze({ id: "wx", label: "WeGame - 微信" }),
+  Object.freeze({ id: "bilibili", label: "bilibili 扫码登录" }),
+  // 标题处一律写小写「bilibili」（作者 10-21 定）
+  Object.freeze({ id: "steam", label: "Steam 扫码登录" }),
+  Object.freeze({ id: "oppo", label: "OPPO 扫码登录" }),
+  Object.freeze({ id: "xiaomi", label: "小米扫码登录" }),
+  Object.freeze({ id: "vivo", label: "VIVO 扫码登录" }),
+  Object.freeze({ id: "huawei", label: "华为扫码登录" }),
+  Object.freeze({ id: "honor", label: "荣耀扫码登录" })
 ]);
+const LANDING_TRIM = {
+  // 官服登录页底图是 body 背景、按宽度铺（background-size:100% auto）：比 16:9 高的窗口和全屏下面露黑底（作者 10-21 Mac 全屏）。只认带背景视频的登录页，同域游戏页不碰
+  "web.sanguosha.com": ".down-banner,.game12-tips{display:none!important}html:has(#sgsBgVideo){height:100%}body:has(#sgsBgVideo){min-height:100%;background-size:cover!important;background-position:center!important}",
+  "my.4399.com": ".wg-ad{display:none!important}"
+};
+function landingTrimCss(hostname) {
+  return LANDING_TRIM[String(hostname || "").toLowerCase()] || "";
+}
 function entryById(id) {
   return ENTRIES.find((entry) => entry.id === id) || null;
 }
 function providerById(id) {
   return PROVIDERS.find((provider) => provider.id === id) || null;
-}
-function providerByLabel(label) {
-  return PROVIDERS.find((provider) => provider.label === label) || null;
 }
 const TEST_ORIGIN = String(process.env.JND_MICRO_TEST_ORIGIN || "");
 function matchesAnyEntry(url) {
@@ -147,4 +99,4 @@ function matchesAnyEntry(url) {
 function entriesForRenderer() {
   return ENTRIES.map(({ id, label, verified, hostChannel }) => ({ id, label, verified, hostChannel: hostChannel || id }));
 }
-module.exports = { TEST_ORIGIN, ENTRIES, PROVIDERS, entryById, providerById, providerByLabel, matchesAnyEntry, entriesForRenderer, isOfficial };
+module.exports = { TEST_ORIGIN, ENTRIES, RETIRED_ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, entriesForRenderer, isOfficial, landingTrimCss };

@@ -4,22 +4,9 @@ const { ipcRenderer, webFrame } = electron_;
 const components_ = require("./components");
 const { COMPONENTS, parseUserScriptHeader } = components_;
 const entries_ = require("./entries");
-const { ENTRIES, matchesAnyEntry, TEST_ORIGIN } = entries_;
+const { ENTRIES, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 const gm_shim_ = require("./gm-shim");
 const { createGmShim, wrapWithGm } = gm_shim_;
-const direct_login_bridge_ = require("./direct-login-bridge");
-const { installDirectEventBridge } = direct_login_bridge_;
-const AUTH_WINDOW_NAME = (() => {
-  const prefix = "--jnd-auth-window-name=";
-  const value = (process.argv || []).find((argument) => argument.startsWith(prefix))?.slice(prefix.length) || "";
-  return /^sgs-(?:vivo|oppo|steam|xiaomi)-[a-f0-9]{32}$/.test(value) ? value : "";
-})();
-if (AUTH_WINDOW_NAME) {
-  try {
-    window.name = AUTH_WINDOW_NAME;
-  } catch (_) {
-  }
-}
 module.exports = function startInjector(config) {
   const channel = String(config?.hostChannel || config?.id || "unknown");
   function report(level, message, extra = {}) {
@@ -70,20 +57,11 @@ module.exports = function startInjector(config) {
     window.__JND_HOST = {
       ...window.__JND_HOST || {},
       kind: "micro",
-      source: "sgs-multichannel",
       shell: "Electron",
       shellVersion: String(config?.shellVersion || ""),
       engine: "Chromium",
       channel: currentHostChannel()
     };
-  }
-  function installDirectEventHost() {
-    installDirectEventBridge({
-      window,
-      storage: window.sessionStorage,
-      send: (name, payload) => ipcRenderer.send(name, payload),
-      report
-    });
   }
   function installUpdateBridge(startupRecord) {
     let lastState = null;
@@ -227,7 +205,7 @@ ${record.code}
       return;
     }
     for (const record of Object.values(records)) {
-      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href)) continue;
+      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href) || pluginMatches(record.exclude || [], location.href)) continue;
       injectedPlugins.add(record.id);
       const sourceName = `jnd-plugin-${record.id}-${record.version}.user.js`;
       try {
@@ -291,6 +269,22 @@ ${record.code}
     const style = document.createElement("style");
     style.id = "jnd-micro-landing-fit";
     const HIDE = "html,body{overflow:hidden!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}";
+    if (!isOfficialLoginPage(currentUrl() || new URL("about:blank"))) {
+      style.textContent = "::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}";
+      const mountPlain = () => {
+        const root = document.head || document.documentElement;
+        if (!root) return false;
+        if (!style.isConnected) root.append(style);
+        return true;
+      };
+      if (!mountPlain()) {
+        const mo = new MutationObserver(() => {
+          if (mountPlain()) mo.disconnect();
+        });
+        mo.observe(document, { childList: true, subtree: true });
+      }
+      return;
+    }
     style.textContent = HIDE;
     const mount = () => {
       const root = document.head || document.documentElement;
@@ -351,8 +345,16 @@ ${record.code}
       clearTimeout(timer);
       timer = setTimeout(fit, 80);
     };
+    const sizeWatch = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    const watchBody = () => {
+      if (!document.body) return false;
+      sizeWatch?.observe(document.body);
+      return true;
+    };
+    if (!watchBody()) document.addEventListener("DOMContentLoaded", watchBody, { once: true });
     ipcRenderer.on("jnd-landing-game-started", () => {
       stopped = true;
+      sizeWatch?.disconnect();
       window.removeEventListener("resize", schedule);
       clearTimeout(timer);
       document.documentElement.style.zoom = "";
@@ -363,35 +365,52 @@ ${record.code}
     setTimeout(fit, 500);
     setTimeout(fit, 2e3);
   }
+  function installLandingAutoLogin(url) {
+    if (url.hostname !== "my.4399.com" || !/^\/yxsgs\/?$/.test(url.pathname)) return;
+    const script = `(() => { let n = 0; const t = setInterval(() => { n += 1; const u = document.querySelector('.my_unlogin'); const api = window.UniLogin;
+      if (api && typeof api.showPopupLogin === 'function' && u) { clearInterval(t); if (u.offsetWidth || u.offsetHeight) api.showPopupLogin('', '', true); }
+      else if (n > 60) clearInterval(t); }, 250); })();`;
+    void webFrame.executeJavaScript(script, true).catch((error) => report("warn", `4399 登录框唤起失败：${error?.message || error}`));
+  }
   const OFFICIAL_LOGIN_PATHS = ["/login/index.html", "/login/x/index"];
   function isOfficialLoginPage(url) {
     if (TEST_ORIGIN && url.origin === TEST_ORIGIN) return OFFICIAL_LOGIN_PATHS.includes(url.pathname);
     return url.origin === "https://web.sanguosha.com" && OFFICIAL_LOGIN_PATHS.includes(url.pathname);
   }
-  function installLandingWatcher() {
-    let last = "", lastProvider = null, attached = false;
-    const attachProvider = () => {
-      const bridge = window.__JND_UNIFIED_LOGIN;
-      if (!bridge || attached) return;
-      attached = true;
+  {
+    const css = landingTrimCss(location.hostname);
+    const mount = () => {
+      if (!css) return true;
       try {
-        bridge.subscribe((state) => {
-          if (state?.provider) lastProvider = String(state.provider);
-        });
+        if (!document.documentElement || document.getElementById("jnd-landing-trim")) return false;
+        const st = document.createElement("style");
+        st.id = "jnd-landing-trim";
+        st.textContent = css;
+        document.documentElement.append(st);
+        return true;
       } catch (_) {
+        return false;
       }
     };
+    if (!mount()) {
+      const mo = new MutationObserver(() => {
+        if (mount()) mo.disconnect();
+      });
+      mo.observe(document, { childList: true, subtree: true });
+    }
+  }
+  function installLandingWatcher() {
+    let last = "";
     const tick = () => {
-      attachProvider();
       const loggedIn = Boolean(document.getElementById("logoutBtn"));
       const nickname = loggedIn ? String(document.getElementById("nickName")?.textContent || "").trim() : "";
       const form = Boolean(document.getElementById("SGS_login-account"));
       if (!loggedIn && !form) return;
-      const key = `${loggedIn ? 1 : 0}:${nickname}:${lastProvider || ""}`;
+      const key = `${loggedIn ? 1 : 0}:${nickname}`;
       if (key === last) return;
       last = key;
       try {
-        ipcRenderer.send("jnd-landing-state", { loggedIn, nickname, provider: lastProvider });
+        ipcRenderer.send("jnd-landing-state", { loggedIn, nickname });
       } catch (_) {
       }
     };
@@ -399,59 +418,98 @@ ${record.code}
   }
   function installLoginBridge() {
     let unsubscribe = null;
-    let pending = null;
-    const startLogin = (request) => {
-      const provider = String(request?.provider || "");
-      if (!provider) return;
-      const options = {
-        mode: request?.mode === "browser" ? "browser" : "qr",
-        ...request?.nonce ? { nonce: String(request.nonce) } : {},
-        ...request?.state ? { state: String(request.state) } : {}
-      };
-      return window.__JND_UNIFIED_LOGIN.start(provider, options).catch((error) => report("warn", `统一登录器发起失败：${error?.message || error}`));
+    let pending = null, current = null;
+    let draining = false, accepting = false, revision = 0;
+    const forward = (state) => {
+      if (!accepting || !current || state.provider && state.provider !== current.provider) return;
+      try {
+        ipcRenderer.send("jnd-login-state", { ...state, requestId: current.requestId, requestProvider: current.provider });
+      } catch (_) {
+      }
+    };
+    const drain = async () => {
+      const bridge = window.__JND_UNIFIED_LOGIN;
+      if (draining || !bridge || !pending) return;
+      draining = true;
+      try {
+        while (pending) {
+          const request = pending, ownRevision = revision;
+          pending = null;
+          accepting = false;
+          bridge.cancel();
+          while (bridge.get().busy && ownRevision === revision) await new Promise((resolve) => setTimeout(resolve, 100));
+          if (ownRevision !== revision) continue;
+          current = request;
+          accepting = true;
+          try {
+            await (request.web && bridge.webFinish ? bridge.webFinish(request.provider, request.web) : bridge.start(request.provider));
+          } catch (error) {
+            if (ownRevision === revision) forward({ provider: request.provider, stage: "", qr: "", text: "", error: { code: "LOGIN_START_FAILED" } });
+            report("warn", "LOGIN_START_FAILED");
+          } finally {
+            delete request.web;
+          }
+        }
+      } finally {
+        draining = false;
+      }
     };
     const attach = () => {
       const bridge = window.__JND_UNIFIED_LOGIN;
       if (!bridge || unsubscribe) return Boolean(bridge);
-      unsubscribe = bridge.subscribe((state) => {
-        try {
-          ipcRenderer.send("jnd-login-state", state);
-        } catch (_) {
-        }
-      });
+      unsubscribe = bridge.subscribe(forward);
+      ipcRenderer.send("jnd-login-bridge-ready");
       let last = "";
       setInterval(() => {
         try {
+          if (!accepting || !current) return;
           const s = bridge.get();
-          const key = `${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ""}`;
+          const key = `${current.requestId}|${s.provider}|${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ""}`;
           if (key !== last) {
             last = key;
-            ipcRenderer.send("jnd-login-state", s);
+            forward(s);
           }
         } catch (_) {
         }
       }, 400);
-      if (pending) {
-        const request = pending;
-        pending = null;
-        void startLogin(request);
-      }
       return true;
     };
     ipcRenderer.on("jnd-login-start", (_event, request) => {
-      const value = typeof request === "string" ? { provider: request } : request;
-      const normalized = {
-        provider: String(value?.provider || ""),
-        mode: value?.mode === "browser" ? "browser" : "qr",
-        nonce: String(value?.nonce || ""),
-        state: String(value?.state || "")
+      if (!request || typeof request.provider !== "string" || !Number.isSafeInteger(request.requestId)) return;
+      revision += 1;
+      accepting = false;
+      pending = { provider: request.provider, requestId: request.requestId };
+      try {
+        window.__JND_UNIFIED_LOGIN?.cancel();
+      } catch (_) {
+      }
+      if (attach()) void drain();
+    });
+    ipcRenderer.on("jnd-login-web-url", (_event, request) => {
+      const reply = (url, error) => {
+        try {
+          ipcRenderer.send("jnd-login-web-url-result", { reqId: request?.reqId, url, error });
+        } catch (_) {
+        }
       };
-      if (!normalized.provider) return;
-      if (attach()) void startLogin(normalized);
-      else pending = normalized;
+      Promise.resolve().then(() => window.__JND_UNIFIED_LOGIN?.webURL?.(String(request?.provider || ""))).then((url) => reply(String(url || ""), ""), (e) => reply("", String(e?.message || e?.code || e)));
+    });
+    ipcRenderer.on("jnd-login-web-finish", (_event, request) => {
+      if (!request || typeof request.provider !== "string" || !Number.isSafeInteger(request.requestId) || !request.web || typeof request.web !== "object") return;
+      revision += 1;
+      accepting = false;
+      pending = { provider: request.provider, requestId: request.requestId, web: request.web };
+      try {
+        window.__JND_UNIFIED_LOGIN?.cancel();
+      } catch (_) {
+      }
+      if (attach()) void drain();
     });
     ipcRenderer.on("jnd-login-cancel", () => {
+      revision += 1;
       pending = null;
+      accepting = false;
+      current = null;
       try {
         window.__JND_UNIFIED_LOGIN?.cancel();
       } catch (_) {
@@ -460,7 +518,13 @@ ${record.code}
     let tries = 0;
     const timer = setInterval(() => {
       tries += 1;
-      if (attach() || tries > 80) clearInterval(timer);
+      if (attach()) {
+        clearInterval(timer);
+        void drain();
+      } else if (tries > 80) {
+        clearInterval(timer);
+        report("warn", "统一登录器 20 秒内没有挂载，扫码无法发起");
+      }
     }, 250);
   }
   function installCredentialAutofill() {
@@ -686,7 +750,6 @@ ${record.code}
   }
   async function injectStartupRuntime() {
     installHostFacts();
-    installDirectEventHost();
     const url = currentUrl();
     if (!url) return false;
     const game = isGameDocument();
@@ -727,7 +790,7 @@ ${record.code}
       }
     }
     if (!game) {
-      if (process.isMainFrame && isOfficialLoginPage(url)) {
+      if (process.isMainFrame && /^https?:$/.test(url.protocol)) {
         try {
           installLandingNetworkGuard();
         } catch (error) {
@@ -737,6 +800,11 @@ ${record.code}
           installLandingFit();
         } catch (error) {
           report("warn", `落地页适配失败：${error.message}`);
+        }
+        try {
+          installLandingAutoLogin(url);
+        } catch (error) {
+          report("warn", `落地页登录唤起失败：${error.message}`);
         }
       }
       return false;

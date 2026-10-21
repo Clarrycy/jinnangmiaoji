@@ -12,6 +12,10 @@ const FRAME = Object.freeze({ side: 3, bottom: 3, top: 0, radius: 6 });
 const BAR_COLOR = '#f3f3f3';
 const BAR_SYMBOL = '#1b1b1f';
 const CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+// macOS（作者 10-21）：用系统红绿灯，不画右上三键。红绿灯三颗各 12、间距 8，组宽 52；左距 12、在 32 高的标题栏里垂直居中。
+// 标题栏左侧整体右移 MAC_INSET 给它让位（导航三键原本左内边距 6，红绿灯右边再留 12）；全屏时红绿灯收起，让位一并撤掉。
+const MAC_LIGHTS = Object.freeze({ x: 12, y: 10 });
+const MAC_INSET = MAC_LIGHTS.x + 52 + 12 - 6;
 
 // 基底样式：标题栏、视域框。chrome 视图与 design/shell-harness 共用这一份（harness 再把 html/body 改成页面流式布局）。
 function baseCss() {
@@ -34,7 +38,7 @@ function frameDocument(title: string) {
 }
 
 // chrome 视图页：透明底，标签栏、弹层、内页都由 shell-preload 里的引擎画。平时只露出标题栏那一条，弹层／内页打开时盖满整窗。
-function chromeDocument(title: string, iconPath: string) {
+function chromeDocument(title: string, iconPath: string, platform = '') {
   const icon = `data:image/png;base64,${fs.readFileSync(iconPath).toString('base64')}`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}"><title>${escapeHtml(title)}</title><style>${baseCss()}
     ${chromeCss(TOKENS, SPEC)}
@@ -47,7 +51,14 @@ function chromeDocument(title: string, iconPath: string) {
     #viewport.page { background: #fff; }
     .game { position: absolute; inset: 0; background: transparent; } .game[hidden] { display: none; } .game .ph { display: none; }
     .ib, .tab, .caption span, .menu, .amenu, .tlmenu, .pg, .scrim, .toasts, .tip { -webkit-app-region: no-drag; }
-    </style></head><body data-icon="${icon}"></body></html>`;
+    /* macOS：左边让给系统红绿灯，右上只留汉堡菜单并贴右；全屏时红绿灯收起，让位撤掉 */
+    body.mac .win > header { padding-left: ${MAC_INSET}px; }
+    body.mac .caption .mn, body.mac .caption .mx, body.mac .caption .cx { display: none; }
+    body.mac .caption { padding-right: 4px; } body.mac .amenu { right: 6px; }
+    /* 全屏（两个平台，作者 10-21）：只有游戏画面——标题栏收起，视域贴满；chrome 层平时高 0，有对话框／扫码卡时才盖上来 */
+    body.full .win > header { display: none; }
+    body.full #viewport { top: 0; left: 0; right: 0; bottom: 0; border: 0; border-radius: 0; }
+    </style></head><body data-icon="${icon}"${platform === 'darwin' ? ' class="mac"' : ''}></body></html>`;
 }
 
 function escapeHtml(value: string) {
@@ -55,10 +66,12 @@ function escapeHtml(value: string) {
 }
 
 // 游戏视图在窗口内容区中的位置：视域框内缩 1px（让边线露出来）。
-function viewportBounds(contentWidth: number, contentHeight: number) {
+// 全屏＝只放大当前标签的游戏画面（作者 10-21）：标题栏与标签收起，游戏铺满整个屏幕；其他标签视图本来就不可见、由 Chromium 后台节流。
+function viewportBounds(contentWidth: number, contentHeight: number, fullscreen = false) {
+  if (fullscreen) return { x: 0, y: 0, width: Math.max(0, contentWidth), height: Math.max(0, contentHeight) };
   const x = FRAME.side + 1;
   const y = TITLE_HEIGHT + FRAME.top + 1;
   return { x, y, width: Math.max(0, contentWidth - x - FRAME.side - 1), height: Math.max(0, contentHeight - y - FRAME.bottom - 1) };
 }
 
-export = { TITLE_HEIGHT, FRAME, BAR_COLOR, BAR_SYMBOL, CSP, baseCss, frameDocument, chromeDocument, viewportBounds };
+export = { TITLE_HEIGHT, FRAME, BAR_COLOR, BAR_SYMBOL, CSP, MAC_LIGHTS, MAC_INSET, baseCss, frameDocument, chromeDocument, viewportBounds };

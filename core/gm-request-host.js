@@ -3,10 +3,12 @@
 const http = require("http");
 const https = require("https");
 const zlib = require("zlib");
+const cookieJar = require("./gm-cookie-jar");
+const steam_direct_ = require("./steam-direct-agent");
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 2e4;
-const MAX_TIMEOUT_MS = 10 * 60 * 1e3;
+const MAX_TIMEOUT_MS = 315e3;
 const ALWAYS_ALLOWED = ["sanguosha.com"];
 function hostAllowed(hostname, allowHosts) {
   const host = String(hostname || "").toLowerCase();
@@ -33,7 +35,8 @@ function parseSetCookie(line, url) {
   const parts = String(line).split(";").map((part) => part.trim()).filter(Boolean);
   const [name, ...valueParts] = (parts.shift() || "").split("=");
   if (!name) return null;
-  const cookie = { url: url.origin + "/", name: name.trim(), value: valueParts.join("=") };
+  const cookie = { url: url.href, name: name.trim(), value: valueParts.join("="), path: url.pathname.slice(0, url.pathname.lastIndexOf("/") + 1).replace(/\/$/, "") || "/" };
+  let maxAge;
   for (const part of parts) {
     const [key, ...rest] = part.split("=");
     const attribute = key.trim().toLowerCase();
@@ -43,115 +46,25 @@ function parseSetCookie(line, url) {
     else if (attribute === "secure") cookie.secure = true;
     else if (attribute === "httponly") cookie.httpOnly = true;
     else if (attribute === "expires" && Number.isFinite(Date.parse(value))) cookie.expirationDate = Date.parse(value) / 1e3;
-    else if (attribute === "max-age" && Number.isFinite(Number(value))) cookie.expirationDate = Date.now() / 1e3 + Number(value);
+    else if (attribute === "max-age" && /^-?\d+$/.test(value)) maxAge = Number(value);
+    else if (attribute === "samesite") cookie.sameSite = { none: "no_restriction", lax: "lax", strict: "strict" }[value.toLowerCase()];
   }
+  if (maxAge !== void 0) cookie.expirationDate = Math.max(0, Date.now() / 1e3 + maxAge);
   return cookie;
-}
-function cookieKey(cookie) {
-  return `${String(cookie?.domain || "").replace(/^\./, "")}
-${cookie?.path || "/"}
-${cookie?.name || ""}`;
-}
-function cookieLine(cookie) {
-  const clean = (value) => String(value == null ? "" : value).replace(/[\r\n]/g, "");
-  let line = `${clean(cookie.name)}=${clean(cookie.value)}; Path=${clean(cookie.path || "/")}`;
-  if (cookie.domain && !cookie.hostOnly) line += `; Domain=${clean(cookie.domain)}`;
-  if (cookie.secure) line += "; Secure";
-  if (cookie.httpOnly) line += "; HttpOnly";
-  if (Number.isFinite(cookie.expirationDate)) line += `; Expires=${new Date(cookie.expirationDate * 1e3).toUTCString()}`;
-  if (/^(strict|lax|none)$/i.test(String(cookie.sameSite || ""))) line += `; SameSite=${cookie.sameSite}`;
-  return line;
-}
-function expiredCookieLine(cookie) {
-  const clean = (value) => String(value == null ? "" : value).replace(/[\r\n]/g, "");
-  let line = `${clean(cookie.name)}=; Max-Age=0; Path=${clean(cookie.path || "/")}`;
-  if (cookie.domain && !cookie.hostOnly) line += `; Domain=${clean(cookie.domain)}`;
-  return line;
-}
-async function cookieSnapshot(session) {
-  const snapshot = /* @__PURE__ */ new Map();
-  if (!session?.cookies?.get) return snapshot;
-  const cookies = await session.cookies.get({});
-  for (const cookie of cookies || []) snapshot.set(cookieKey(cookie), cookie);
-  return snapshot;
-}
-function changedCookieLines(before, after) {
-  const lines = [];
-  for (const [key, cookie] of after) {
-    const previous = before.get(key);
-    if (!previous || String(previous.value) !== String(cookie.value)) lines.push(cookieLine(cookie));
-  }
-  for (const [key, cookie] of before) if (!after.has(key)) lines.push(expiredCookieLine(cookie));
-  return lines;
-}
-function addSetCookieLines(response, lines) {
-  if (!lines.length) return;
-  const raw = Array.isArray(response.rawHeaders) ? response.rawHeaders.slice() : [];
-  const existing = /* @__PURE__ */ new Set();
-  for (let index = 0; index + 1 < raw.length; index += 2) {
-    if (String(raw[index]).toLowerCase() === "set-cookie") existing.add(String(raw[index + 1]).trim());
-  }
-  for (const line of lines) {
-    if (existing.has(line.trim())) continue;
-    existing.add(line.trim());
-    raw.push("Set-Cookie", line);
-  }
-  response.rawHeaders = raw;
-}
-function parseCookieHeader(header) {
-  const cookies = [];
-  for (const part of String(header || "").split(";")) {
-    const pair = part.trim();
-    const equal = pair.indexOf("=");
-    if (equal < 1) continue;
-    const name = pair.slice(0, equal).trim();
-    const value = pair.slice(equal + 1).trim();
-    if (!/^[\w!#$%&'*+.^`|~-]+$/.test(name) || /[\r\n]/.test(value)) continue;
-    cookies.push({ name, value });
-  }
-  return cookies;
-}
-async function seedExplicitCookies(session, url, header) {
-  if (!session?.cookies?.set) return;
-  for (const cookie of parseCookieHeader(header)) {
-    try {
-      await session.cookies.set({ url: url.origin + "/", name: cookie.name, value: cookie.value });
-    } catch (_) {
-    }
-  }
-}
-async function copySessionCookies(source, target) {
-  if (!source?.cookies?.get || !target?.cookies?.set) return;
-  let cookies = [];
-  try {
-    cookies = await source.cookies.get({});
-  } catch (_) {
-    return;
-  }
-  for (const cookie of cookies || []) {
-    const value = {
-      name: cookie.name,
-      value: cookie.value,
-      domain: cookie.domain,
-      path: cookie.path || "/",
-      secure: Boolean(cookie.secure),
-      httpOnly: Boolean(cookie.httpOnly)
-    };
-    if (Number.isFinite(cookie.expirationDate)) value.expirationDate = cookie.expirationDate;
-    if (cookie.sameSite) value.sameSite = cookie.sameSite;
-    try {
-      await target.cookies.set(value);
-    } catch (_) {
-    }
-  }
 }
 function createGmRequestHost(options = {}) {
   const log = typeof options.log === "function" ? options.log : () => {
   };
-  const electronNet = options.net && typeof options.net.request === "function" ? options.net : null;
-  const isolatedSession = typeof options.isolatedSession === "function" ? options.isolatedSession : null;
+  const trace = (event) => {
+    try {
+      options.trace?.(event);
+    } catch (_) {
+    }
+  };
+  const electronNet = options.net && typeof options.net.request === "function" && process.env.JND_GM_NODE !== "1" ? options.net : null;
   const tlsOptions = options.tlsOptions && typeof options.tlsOptions === "object" ? options.tlsOptions : {};
   const active = /* @__PURE__ */ new Map();
+  const pool = options.isolatedSession ? cookieJar.createPool(options.isolatedSession) : null;
   async function sessionCookieHeader(session, url) {
     if (!session?.cookies) return "";
     try {
@@ -166,13 +79,10 @@ function createGmRequestHost(options = {}) {
     for (const line of setCookieLines(response)) {
       const cookie = parseSetCookie(line, url);
       if (!cookie) continue;
-      try {
-        await session.cookies.set(cookie);
-      } catch (_) {
-      }
+      await session.cookies.set(cookie);
     }
   }
-  function onceNet(url, request, settle, session, useSessionCookies) {
+  function onceNet(url, request, settle, session) {
     const method = String(request.method || "GET").toUpperCase();
     const headers = { ...request.headers };
     const body = request.data == null ? null : Buffer.from(String(request.data), "utf8");
@@ -184,7 +94,9 @@ function createGmRequestHost(options = {}) {
         clearTimeout(timer);
         fn();
       };
-      const req = electronNet.request({ method, url: url.href, session: session || void 0, useSessionCookies, redirect: "manual" });
+      const hasReferer = Object.keys(headers).some((k) => k.toLowerCase() === "referer");
+      for (const k of Object.keys(headers)) if (session && k.toLowerCase() === "cookie") delete headers[k];
+      const req = electronNet.request({ method, url: url.href, ...session ? { session } : {}, useSessionCookies: Boolean(session), redirect: "manual", ...hasReferer ? { referrerPolicy: "unsafe-url" } : {} });
       for (const [k, v] of Object.entries(headers)) {
         try {
           req.setHeader(k, String(v));
@@ -209,7 +121,7 @@ function createGmRequestHost(options = {}) {
         const raw = [];
         for (const [k, v] of Object.entries(responseHeaders || {})) for (const one of Array.isArray(v) ? v : [v]) raw.push(k, String(one));
         const loc = Object.entries(responseHeaders || {}).find(([k]) => k.toLowerCase() === "location");
-        finish(() => resolve({ response: { statusCode, statusMessage: "", headers: { location: loc ? String(Array.isArray(loc[1]) ? loc[1][0] : loc[1]) : void 0 }, rawHeaders: raw }, body: Buffer.alloc(0) }));
+        finish(() => resolve({ response: { cookiesHandled: Boolean(session), statusCode, statusMessage: "", headers: { location: loc ? String(Array.isArray(loc[1]) ? loc[1][0] : loc[1]) : void 0 }, rawHeaders: raw }, body: Buffer.alloc(0) }));
         try {
           req.abort();
         } catch (_) {
@@ -235,7 +147,7 @@ function createGmRequestHost(options = {}) {
           if (!raw.length) for (const [k, v] of Object.entries(response.headers || {})) for (const one of Array.isArray(v) ? v : [v]) raw.push(k, String(one));
           const headersObj = {};
           for (const [k, v] of Object.entries(response.headers || {})) headersObj[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
-          finish(() => resolve({ response: { statusCode: Number(response.statusCode || 0), statusMessage: String(response.statusMessage || ""), headers: headersObj, rawHeaders: raw }, body: Buffer.concat(chunks) }));
+          finish(() => resolve({ response: { cookiesHandled: Boolean(session), statusCode: Number(response.statusCode || 0), statusMessage: String(response.statusMessage || ""), headers: headersObj, rawHeaders: raw }, body: Buffer.concat(chunks) }));
         });
         response.on("error", (e) => finish(() => reject(e)));
         response.on("aborted", () => finish(() => reject(new Error("Response aborted"))));
@@ -245,8 +157,31 @@ function createGmRequestHost(options = {}) {
       req.end();
     });
   }
-  function once(url, request, settle, session, useSessionCookies = false) {
-    if (electronNet) return onceNet(url, request, settle, session, useSessionCookies);
+  async function once(url, request, settle, session) {
+    if (!electronNet || !options.steamDirect || !steam_direct_.isSteamDirectUrl(url))
+      return electronNet ? onceNet(url, request, settle, session) : onceNode(url, request, settle);
+    const started = Date.now(), control = new AbortController();
+    settle.cancel = (reason) => control.abort(reason);
+    const deadline = setTimeout(() => settle.cancel?.(Object.assign(new Error("timeout"), { kind: "timeout" })), request.timeout);
+    let direct = null;
+    try {
+      try {
+        direct = await options.steamDirect.prepare(url, control.signal);
+      } catch (error) {
+        if (control.signal.aborted) throw control.signal.reason;
+        log("steam-direct fallback", url.hostname, "code=", error?.code || "CONNECT_FAILED");
+      }
+      if (control.signal.aborted) throw control.signal.reason;
+      const remaining = request.timeout - (Date.now() - started);
+      if (remaining <= 0) throw Object.assign(new Error("timeout"), { kind: "timeout" });
+      const bounded = { ...request, timeout: remaining };
+      return await (direct ? onceNode(url, bounded, settle, direct) : onceNet(url, bounded, settle, session));
+    } finally {
+      clearTimeout(deadline);
+      direct?.cancel();
+    }
+  }
+  function onceNode(url, request, settle, direct = null) {
     const method = String(request.method || "GET").toUpperCase();
     const client = url.protocol === "https:" ? https : http;
     const headers = { ...request.headers };
@@ -254,7 +189,7 @@ function createGmRequestHost(options = {}) {
     if (body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-length")) headers["Content-Length"] = body.length;
     if (!Object.keys(headers).some((key) => key.toLowerCase() === "accept-encoding")) headers["Accept-Encoding"] = "gzip, deflate, br";
     return new Promise((resolve, reject) => {
-      const req = client.request(url, { method, headers, ...tlsOptions }, (response) => {
+      const req = client.request(url, { method, headers, ...tlsOptions, ...direct ? { agent: direct.agent, rejectUnauthorized: true } : {} }, (response) => {
         let stream = response;
         const encoding = String(response.headers["content-encoding"] || "").toLowerCase();
         if (encoding === "br") stream = response.pipe(zlib.createBrotliDecompress());
@@ -270,13 +205,26 @@ function createGmRequestHost(options = {}) {
           }
           chunks.push(chunk);
         });
-        stream.on("end", () => resolve({ response, body: Buffer.concat(chunks) }));
-        stream.on("error", reject);
-        response.on("aborted", () => reject(new Error("Response aborted")));
+        stream.on("end", () => {
+          if (response.statusCode >= 200 && response.statusCode < 400) direct?.success();
+          else direct?.failure();
+          resolve({ response, body: Buffer.concat(chunks) });
+        });
+        stream.on("error", (error) => {
+          direct?.failure();
+          reject(error);
+        });
+        response.on("aborted", () => {
+          direct?.failure();
+          reject(new Error("Response aborted"));
+        });
       });
       settle.cancel = (reason) => req.destroy(reason);
       req.setTimeout(request.timeout, () => req.destroy(Object.assign(new Error("timeout"), { kind: "timeout" })));
-      req.on("error", reject);
+      req.on("error", (error) => {
+        direct?.failure();
+        reject(error);
+      });
       if (body) req.write(body);
       req.end();
     });
@@ -286,8 +234,6 @@ function createGmRequestHost(options = {}) {
       method: String(input.method || "GET").toUpperCase(),
       headers: {},
       data: input.data,
-      // Xiaomi's QR login holds one long-poll request for up to 315 seconds.
-      // Capping every GM request at 60 seconds closes the QR before a slow scan.
       timeout: Math.max(1e3, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)),
       manualRedirect: input.redirect === "manual",
       anonymous: Boolean(input.anonymous),
@@ -300,56 +246,62 @@ function createGmRequestHost(options = {}) {
         const bad = [...new Set([...value].filter((ch) => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
         throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map((ch) => "U+" + ch.codePointAt(0).toString(16).toUpperCase()).join(","));
       }
-      request.headers[key] = value;
+      if (key.toLowerCase() === "cookie") {
+        if (request.explicitCookie == null) request.explicitCookie = value;
+      } else request.headers[key] = value;
     }
     let url = new URL(String(input.url || ""));
     if (url.protocol !== "https:") throw new Error(`GM 请求只允许 HTTPS：${url.protocol}`);
     if (!hostAllowed(url.hostname, context.allowHosts)) throw new Error(`域名不在 @connect 白名单：${url.hostname}`);
     const useSessionCookies = !request.anonymous && request.explicitCookie == null;
     const settle = { cancel: null };
-    active.set(id, settle);
-    let jar = null;
+    const control = new AbortController(), deadline = Date.now() + request.timeout;
+    active.set(id, { cancel(reason) {
+      control.abort(reason);
+      settle.cancel?.(reason);
+    } });
+    const timer = setTimeout(() => {
+      const e = Object.assign(new Error("timeout"), { kind: "timeout" });
+      control.abort(e);
+      settle.cancel?.(e);
+    }, request.timeout);
+    let lease = null;
+    const check = () => {
+      if (control.signal.aborted) throw control.signal.reason;
+    };
     try {
-      if (isolatedSession) {
-        jar = await isolatedSession();
-        if (!jar) throw new Error("隔离 Cookie 会话不可用");
-        if (context.session?.getUserAgent && jar.setUserAgent) {
-          try {
-            jar.setUserAgent(context.session.getUserAgent());
-          } catch (_) {
-          }
-        }
-        if (request.explicitCookie != null) await seedExplicitCookies(jar, url, request.explicitCookie);
-        else if (useSessionCookies) await copySessionCookies(context.session, jar);
+      if (pool) {
+        lease = await pool.acquire(control.signal);
+        check();
+        await cookieJar.seed(
+          useSessionCookies ? context.session : null,
+          lease.session,
+          url,
+          request.explicitCookie,
+          (host) => hostAllowed(host, context.allowHosts)
+        );
+        check();
       }
       let method = request.method;
       let data = request.data;
-      const syntheticCookieLines = [];
       for (let hop = 0; ; hop += 1) {
         const headers = { ...request.headers };
-        if (jar) {
-          for (const name of Object.keys(headers)) if (name.toLowerCase() === "cookie") delete headers[name];
-        } else if (request.explicitCookie != null) {
-          if (request.explicitCookie) headers.Cookie = request.explicitCookie;
-        } else if (useSessionCookies) {
-          const cookie = await sessionCookieHeader(context.session, url);
+        check();
+        const jar = lease?.session, before = jar ? await cookieJar.snapshot(jar) : null;
+        if (jar || useSessionCookies) {
+          const cookie = await sessionCookieHeader(jar || context.session, url);
           if (cookie) headers.Cookie = cookie;
-        }
-        const before = jar ? await cookieSnapshot(jar) : null;
-        const { response, body } = await once(
-          url,
-          { method, headers, data, timeout: request.timeout },
-          settle,
-          jar || context.session,
-          Boolean(jar) || useSessionCookies
-        );
-        if (jar && before) {
-          const lines = changedCookieLines(before, await cookieSnapshot(jar));
-          if (request.manualRedirect) addSetCookieLines(response, lines);
-          else syntheticCookieLines.push(...lines);
+        } else if (request.explicitCookie && url.origin === new URL(input.url).origin) headers.Cookie = request.explicitCookie;
+        check();
+        const { response, body } = await once(url, { method, headers, data, timeout: Math.max(1, deadline - Date.now()) }, settle, jar);
+        check();
+        if (jar) {
+          if (!response.cookiesHandled) await persistCookies(jar, response, url);
+          await cookieJar.changed(before, jar, useSessionCookies ? context.session : null, response);
         } else if (useSessionCookies) await persistCookies(context.session, response, url);
         const status = Number(response.statusCode || 0);
         const location = response.headers.location;
+        trace({ id, hop, method, url: url.href, reqHeaders: headers, reqData: data, status, location, resHeaders: response.headers, setCookie: response.headers["set-cookie"], contentType: String(response.headers["content-type"] || ""), body: request.binary ? body : body.toString("utf8") });
         if (!request.manualRedirect && [301, 302, 303, 307, 308].includes(status) && location) {
           if (hop >= MAX_REDIRECTS) throw new Error("重定向次数过多");
           const next = new URL(location, url);
@@ -362,7 +314,6 @@ function createGmRequestHost(options = {}) {
           url = next;
           continue;
         }
-        if (!request.manualRedirect) addSetCookieLines(response, syntheticCookieLines);
         return {
           kind: "load",
           status,
@@ -373,11 +324,9 @@ function createGmRequestHost(options = {}) {
         };
       }
     } finally {
-      if (jar?.clearStorageData) try {
-        await jar.clearStorageData();
-      } catch (_) {
-      }
+      clearTimeout(timer);
       active.delete(id);
+      if (lease) await lease.release();
     }
   }
   return Object.freeze({
@@ -386,7 +335,13 @@ function createGmRequestHost(options = {}) {
         return await perform(id, input, context);
       } catch (error) {
         const kind = error?.kind === "timeout" ? "timeout" : error?.kind === "abort" ? "abort" : "error";
-        log("GM request failed", JSON.stringify({ id, kind, message: String(error?.message || error) }));
+        let u = null;
+        try {
+          u = new URL(String(input?.url || ""));
+        } catch (_) {
+        }
+        trace({ id, hop: -1, method: String(input?.method || "GET"), url: String(input?.url || ""), reqHeaders: input?.headers, reqData: input?.data, error: String(error?.message || error), kind });
+        log("GM request failed", JSON.stringify({ id, kind, code: String(error?.code || "GM_REQUEST_FAILED"), host: u?.hostname, path: u?.pathname, method: input?.method || "GET", headers: Object.keys(input?.headers || {}), binary: input?.responseType === "arraybuffer", redirect: input?.redirect || "follow", anonymous: Boolean(input?.anonymous), cookie: typeof input?.cookie === "string" ? input.cookie.length : null, transport: electronNet ? "net" : "node" }));
         return { kind, status: 0, statusText: "", responseHeaders: "", finalUrl: String(input?.url || ""), error: String(error?.message || error) };
       }
     },

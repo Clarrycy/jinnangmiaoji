@@ -1,9 +1,8 @@
 import electron_ = require('electron');
-const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage, screen, shell, net } = electron_;
+const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, safeStorage, screen, shell, net, clipboard } = electron_;
 import fs = require('fs');
 import path = require('path');
 import https = require('https');
-import crypto = require('crypto');
 import attachMainInjector = require('./main-injector');
 import node_update_host_ = require('./node-update-host');
 const { createNodeUpdateHost, requestBuffer } = node_update_host_;
@@ -11,6 +10,8 @@ import component_update_host_ = require('./component-update-host');
 const { createComponentUpdateHost } = component_update_host_;
 import gm_request_host_ = require('./gm-request-host');
 const { createGmRequestHost } = gm_request_host_;
+import steam_direct_ = require('./steam-direct-agent');
+const { createSteamDirectConnector } = steam_direct_;
 import shell_update_host_ = require('./shell-update-host');
 const { createShellUpdateHost } = shell_update_host_;
 import credential_store_ = require('./credential-store');
@@ -20,25 +21,33 @@ const { createPluginStore } = plugin_store_;
 import components_ = require('./components');
 const { COMPONENTS, parseUserScriptHeader } = components_;
 import entries_ = require('./entries');
-const { ENTRIES, PROVIDERS, entryById, providerById, providerByLabel, matchesAnyEntry, TEST_ORIGIN } = entries_;
+import landing_pack_ = require('./landing-pack');
+import login_recorder_ = require('./login-recorder');
+const { createLoginRecorder } = login_recorder_;
+const { createLandingPack } = landing_pack_;
+const { ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 import game_shell_ = require('./game-shell');
-const { TITLE_HEIGHT, FRAME, BAR_COLOR, frameDocument, chromeDocument, viewportBounds } = game_shell_;
+const { TITLE_HEIGHT, FRAME, BAR_COLOR, MAC_LIGHTS, MAC_INSET, frameDocument, chromeDocument, viewportBounds } = game_shell_;
+const IS_MAC = process.platform === 'darwin';
 const UpdateCore = require('./update-core'); // UMD 脚本，不是 TS 模块；浏览器侧也要原样跑
 import popup_window_ = require('./popup-window');
 const { createOverlays } = popup_window_;
 
 // 一个窗口 ＝ 一个 chrome 视图（标签栏、弹层、内页；透明，叠最上）＋ 每个游戏标签一个 WebContentsView（各自会话分区）。
 // chrome 视图平时只占标题栏那一条，弹层／对话框／内页打开时盖满整窗（引擎通过 cover 报）。
-type TabRecord = { id: number; owner: WinRecord; view: any; contents: any; slot: number; entryId: string; provider: string; pendingCredential: any; loginProvider: string | null; loginOptionId: string; loginMode: 'qr' | 'browser' | ''; loginNonce: string; loginState: string; loginAuthCompleted: boolean; loginWindow: any; loginSeen: string; loginPrev: { entryId: string; provider: string } | null; preferredAccount: string; lastAccount: string; muted: boolean; nick: string; uid: string };
-type WinRecord = { win: any; chrome: any; chromeContents: any; tabs: Map<number, TabRecord>; order: number[]; cur: number | null; curKind: string; overlays: any; covered: boolean; closing: boolean; ready: boolean; chromeKey?: string; viewKey?: string; pendingAdopt?: TabRecord | null; pageKind?: string | null; follow?: ReturnType<typeof setInterval> | null; active?: TabRecord | null; merged?: boolean };
+type WebSheet = { view: any; provider: string; close: (reason: string) => void };
+type TabRecord = { id: number; shownOnce?: boolean; webSheet?: WebSheet | null; webOpenSeq?: number; owner: WinRecord; view: any; contents: any; slot: number; entryId: string; pendingCredential: any; loginProvider: string | null; loginRequest: number; loginStartedFor?: number; loginNavigation?: Promise<void> | null; loginBridgeReady?: boolean; loginBegin?: (() => void) | null; loginSeen: string; loginRetries: number; qrModel?: QrMsg | null; preferredAccount: string; lastAccount: string; muted: boolean; nick: string; uid: string };
+/* 扫码卡最后一次画的样子：拖到别的窗口时按它原样重开（审计 C4） */
+type QrMsg = { provider: string; stage: string; qr: string; text: string; code?: string; retry?: number };
+type WinRecord = { win: any; chrome: any; chromeContents: any; tabs: Map<number, TabRecord>; order: number[]; cur: number | null; curKind: string; overlays: any; covered: boolean; chromeKeys?: boolean; closing: boolean; ready: boolean; chromeKey?: string; viewKey?: string; pendingAdopt?: TabRecord | null; pageKind?: string | null; follow?: ReturnType<typeof setInterval> | null; active?: TabRecord | null; merged?: boolean; leaving?: TabRecord | null; leavingTimer?: ReturnType<typeof setTimeout> | null };
 
 const configuredSessions = new WeakSet();
 const windows = new Map<any, WinRecord>();
-const authWindowOwners = new Map<any, TabRecord>();
 const occupiedSlots = new Set<number>();
 let nextSlot = 1; // 槽位号只增不复用：复用会让新标签带上上一个账号的登录态（作者 10-19：新标签必须是干净的）
 const crashHistory = new WeakMap();
 const recoveryTimers = new Map();
+const pendingErrorPages = new WeakMap<any, ReturnType<typeof setImmediate>>();
 let updateHost = null;
 let componentHost = null;
 let gmHost = null;
@@ -48,8 +57,7 @@ let pluginStore = null;
 
 const OFFICIAL_LOGIN_PATHS = ['/login/index.html', '/login/x/index'];
 // 第三方方式在标签 chip 上的简称（与引擎 PROVIDER_CHIP 一致）
-const PROVIDER_CHIP: Record<string, string> = { qq: 'WeGame', wx: 'WeGame', bilibili: '哔哩哔哩', steam: 'Steam', oppo: 'OPPO', xiaomi: '小米', vivo: 'VIVO', huawei: '华为', honor: '荣耀',
-  'steam-web': 'Steam', 'oppo-web': 'OPPO', 'xiaomi-web': '小米', 'vivo-web': 'VIVO' };
+const PROVIDER_CHIP: Record<string, string> = { qq: 'WeGame', wx: 'WeGame', bilibili: 'bilibili', steam: 'Steam', oppo: 'OPPO', xiaomi: '小米', vivo: 'VIVO', huawei: '华为', honor: '荣耀' };
 const UI_DEFAULTS = Object.freeze({ restore: true, confirmClose: true, muteNew: false, manager: true, stats: true });
 
 function escapeHtml(value) {
@@ -117,15 +125,25 @@ export = function startMicroClient(config) {
       if (sync) { try { fs.appendFileSync(file, chunk); } catch (_) {} } else fs.appendFile(file, chunk, () => {});
     }
   }
+  // 登录录制器要接住最早的日志行，所以在 log 之前建
+  const loginRecorder = createLoginRecorder({ meta: () => ({ shell: channel.shellVersion, platform: process.platform, arch: process.arch, electron: process.versions.electron }) });
+  let lastEvidenceAt = 0;
   function log(...args) {
-    logBuffer += `[${new Date().toISOString()}] ${args.join(' ')}\n`;
+    loginRecorder.log(args);
+    /* 登录失败：把这次失败前统一登录器的请求经过（已脱敏）写进日志，玩家只要发日志就够。同一次失败会连报几行，3 秒内只写一次 */
+    if (String(args[0]).startsWith('login-error') && Date.now() - lastEvidenceAt > 3000) { /* 第一个参数是 'login-error slot=' */
+      lastEvidenceAt = Date.now();
+      const evidence = loginRecorder.takeEvidence();
+      if (evidence.length) setImmediate(() => log('login-evidence', JSON.stringify(evidence)));
+    }
+    logBuffer += `[${new Date().toISOString()}] ${login_recorder_.redactText(args.join(' '))}\n`;
     /* 登录流程与导航这几类行同步落盘：主进程段错误时 300ms 缓冲里的最后几行会丢，而那正是要看的 */
     const head = String(args[0] || '');
     if (head.startsWith('login-trace') || head === 'will-navigate' || head === 'did-start-loading' || head.startsWith('chrome-')) { flushLog(true); return; }
     if (!logTimer) logTimer = setTimeout(() => flushLog(false), 300);
   }
 
-  // 壳设置：ui（设置页五项）、session（上次打开的标签）、windowBounds、lastEntry、插件开关。
+  // 壳设置：ui（设置页五项）、session（上次打开的标签）、windowBounds、插件开关。
   const settingsFile = () => path.join(app.getPath('userData'), 'shell-settings.json');
   function readSettings() {
     try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) || {}; } catch (_) { return {}; }
@@ -135,9 +153,8 @@ export = function startMicroClient(config) {
     try { fs.writeFileSync(settingsFile(), JSON.stringify(next)); } catch (error) { log('settings write failed', error?.message || error); }
   }
   const uiSettings = () => ({ ...UI_DEFAULTS, ...(readSettings().ui || {}) });
+  // 新窗口、新标签默认官服（作者 10-21：官服优化得最好；不再记「上次用的入口」）。渠道构建的 id 本身是入口时仍用它。
   function defaultEntryId() {
-    const saved = String(readSettings().lastEntry || '');
-    if (entryById(saved)) return saved;
     return entryById(channel.id) ? channel.id : ENTRIES[0].id;
   }
   const entryByLabel = (label: string) => ENTRIES.find(e => e.label === label) || null;
@@ -148,56 +165,124 @@ export = function startMicroClient(config) {
   // 做法：容器里静态资源的 GET 子资源请求（已知资源主机＋资源后缀）由 webRequest 重定向到 jnd-asset://，处理器用默认 session 的 net.fetch 取——
   // 默认 session 的 HTTP 缓存就是所有容器共享的资源缓存；页面、接口、websocket 一概不碰。JND_NO_SHARED_CACHE=1 关掉做对照。
   const ASSET_HOSTS = /(^|\.)(sanguosha\.com|yokaverse\.com|4399ytzg2\.com|4399iw\d*\.com|iwan4399\.com)$/i;
-  const ASSET_EXT = /\.(?:js|css|json|png|jpe?g|webp|gif|svg|atlas|sgs|bin|wasm|mp3|ogg|wav|m4a|ttf|otf|woff2?|fnt|ani|sk|skel|plist|txt|lh|ls|lmat|lm|lani|lav|ltc|lsani|ktx|pvr|astc|mp4)$/i;
-  const ASSET_TYPES = new Set(['script', 'image', 'xhr', 'fetch', 'media', 'font', 'stylesheet', 'other']);
+  // Keep game scripts on their original HTTPS origin. The official Laya loader
+  // starts libs/workerloader.js with new Worker(); Chromium rejects cross-origin
+  // worker redirects, and this loader has no worker.onerror recovery. A script tag
+  // loading successfully does not validate the same URL when used as a worker.
+  // Exclude both .js URLs and the "script" resource type; excluding the type alone
+  // is insufficient because Electron can classify worker requests as "other".
+  // The separate landing-document exception below preserves its local script load.
+  const ASSET_EXT = /\.(?:css|json|png|jpe?g|webp|gif|svg|atlas|sgs|bin|wasm|mp3|ogg|wav|m4a|ttf|otf|woff2?|fnt|ani|sk|skel|plist|txt|lh|ls|lmat|lm|lani|lav|ltc|lsani|ktx|pvr|astc|mp4)$/i;
+  const ASSET_TYPES = new Set(['image', 'xhr', 'fetch', 'media', 'font', 'stylesheet', 'other']);
   const SHARED_CACHE = process.env.JND_NO_SHARED_CACHE !== '1';
   function isSharedAsset(url: URL) {
     if (!ASSET_HOSTS.test(url.hostname)) return false;
     if (/\.php$|\/login\//i.test(url.pathname) || /api/i.test(url.hostname)) return false;
     return ASSET_EXT.test(url.pathname);
   }
-  function installSharedAssetRedirect(session) {
-    if (!SHARED_CACHE) return;
+  // webRequest 每个事件每个 session 只认最后一次注册的监听器：同一事件再注册会把前一个整个顶掉（10-19 起共享缓存就是这样被登录接口计时盖掉、从没生效）。
+  // 所以 onBeforeRequest 只在这里注册一次，登录接口计时也并进来。
+  const LOGIN_API = /^https:\/\/web-login-api(?:test)?\.sanguosha\.com\//i;
+  function installRequestHooks(session, loginStarted: Map<number, number>) {
     session.webRequest.onBeforeRequest({ urls: ['https://*/*'] }, (details, callback) => {
-      if (details.method !== 'GET' || !ASSET_TYPES.has(String(details.resourceType))) { callback({}); return; }
+      if (LOGIN_API.test(details.url)) { loginStarted.set(details.id, Date.now()); callback({}); return; }
+      if (/\/img\/10th_tmp\/yjcm_n_ban\.png$/i.test(details.url)) { callback({ cancel: true }); return; } /* 落地页下载广告条的图：根本不加载（作者 10-20） */
+      if (!SHARED_CACHE || details.method !== 'GET') { callback({}); return; }
+      const localDocumentScript = details.resourceType === 'script' && Boolean(landingPack && (
+        landingPack.isDocumentScript(details.url, details.frame?.url || '') ||
+        landingPack.isDocumentScript(details.url, details.referrer || '')
+      ));
       let url = null; try { url = new URL(details.url); } catch (_) {}
-      if (!url || !isSharedAsset(url)) { callback({}); return; }
-      callback({ redirectURL: `jnd-asset://shared/${encodeURIComponent(details.url)}` });
+      if (!localDocumentScript && (!url || !ASSET_TYPES.has(String(details.resourceType)) || !isSharedAsset(url))) { callback({}); return; }
+      /* 来源页随重定向带过去：jnd-asset 请求上的 Referer／referrer 不可靠（实测首个标签的背景视频请求拿不到），而官方 CDN 防盗链缺它就拒 */
+      let from = details.referrer || ''; try { if (!from && details.frame?.url) from = new URL(details.frame.url).origin + '/'; } catch (_) {}
+      callback({ redirectURL: `jnd-asset://shared/${encodeURIComponent(details.url)}${from ? `?from=${encodeURIComponent(from)}` : ''}` });
     });
   }
+  // 处理器挂在每个容器 session 上（protocol.handle 只管默认 session），取数一律走默认 session 的 net.fetch
+  async function serveSharedAsset(request) {
+    let original = '', from = '';
+    try { const u = new URL(request.url); original = decodeURIComponent(u.pathname.replace(/^\/+/, '')); from = u.searchParams.get('from') || ''; } catch (_) {}
+    if (!/^https:\/\//i.test(original)) return new Response('', { status: 400 });
+    const headers = new Headers();
+    for (const key of ['accept', 'range', 'origin']) { const value = request.headers.get(key); if (value && /^[\x20-\x7e]*$/.test(value)) headers.set(key, value); }
+    // 官方 CDN 有防盗链：不带 Referer 回一张 gzip 的拒绝页（背景视频因此首次播放失败，报 ERR_CONTENT_DECODING_FAILED）。
+    // 跨源 Referer 要配 unsafe-url 策略，否则 Chromium 网络层直接拒掉（见 GM 请求代理同一处理）
+    const referrer = from || request.headers.get('referer') || '';
+    if (referrer && /^https?:\/\/[\x21-\x7e]+$/.test(referrer)) headers.set('referer', referrer);
+    const local = landingPack?.serveAsset(original, request.headers.get('range')); if (local) return local; /* 官服登录页的私有副本：本地磁盘直接出 */
+    try {
+      const upstream = await net.fetch(original, { method: 'GET', headers, redirect: 'follow', referrerPolicy: 'unsafe-url' });
+      const out = new Headers();
+      for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified', 'cache-control', 'expires', 'date']) { const value = upstream.headers.get(key); if (value) out.set(key, value); }
+      out.set('access-control-allow-origin', '*');
+      return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: out });
+    } catch (error) { log('shared asset fetch failed', original.slice(0, 120), 'referer=', referrer ? 'yes' : 'no', error?.message || error); return new Response('', { status: 502 }); }
+  }
+  // 官服登录页私有化（见 landing-pack.ts）：入口导航前在这个容器的 session 上临时接管 https，只为把登录页文档从本地出；
+  // 拿到第一个请求就撤掉接管，之后的请求（登录接口、风控、游戏）全部原样走网络。JND_NO_LANDING_PACK=1 关掉做对照。
+  let landingPack: ReturnType<typeof createLandingPack> | null = null;
+  function loadEntry(contents, url: string) {
+    const ses = contents.session;
+    if (landingPack?.has() && landingPack.isDoc(url) && !ses.protocol.isProtocolHandled('https')) {
+      let armed = true; const t0 = Date.now();
+      const release = () => { if (!armed) return; armed = false; try { ses.protocol.unhandle('https'); } catch (_) {} installSessionHooks(ses); };
+      removeSessionHooks(ses);
+      ses.protocol.handle('https', request => {
+        try {
+          const doc = armed && request.method === 'GET' && landingPack!.isDoc(request.url);
+          setImmediate(release); /* 在处理器里同步撤接管会把这次响应一起作废 */
+          const local = doc ? landingPack!.serveDoc() : null;
+          if (local) { log('landing doc from pack ms=', Date.now() - t0); setTimeout(() => landingPack?.refresh(), 15000); return local; }
+        } catch (error) { log('landing doc serve failed', error?.stack || error); }
+        return ses.fetch(request, { bypassCustomProtocolHandlers: true });
+      });
+      setTimeout(release, 15000);
+    }
+    return contents.loadURL(url);
+  }
   function installSharedAssetScheme() {
-    if (!SHARED_CACHE) return;
-    const { protocol } = electron_;
-    protocol.handle('jnd-asset', async request => {
-      let original = '';
-      try { original = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, '')); } catch (_) {}
-      if (!/^https:\/\//i.test(original)) return new Response('', { status: 400 });
-      const headers = new Headers();
-      for (const key of ['accept', 'range', 'referer', 'origin']) { const value = request.headers.get(key); if (value && /^[\x20-\x7e]*$/.test(value)) headers.set(key, value); }
-      try {
-        const upstream = await net.fetch(original, { method: 'GET', headers, redirect: 'follow' });
-        const out = new Headers();
-        for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified', 'cache-control', 'expires', 'date']) { const value = upstream.headers.get(key); if (value) out.set(key, value); }
-        out.set('access-control-allow-origin', '*');
-        return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: out });
-      } catch (error) { log('shared asset fetch failed', original.slice(0, 120), error?.message || error); return new Response('', { status: 502 }); }
+    /* 应用级默认 UA 也要清：导航请求用的是它，不是会话 UA。带中文产品名时 protocol.handle 构造请求对象直接抛（ByteString），页面 ERR_UNEXPECTED */
+    try { app.userAgentFallback = cleanUserAgent(app.userAgentFallback); } catch (error) { log('user agent fallback failed', error?.message || error); }
+    if (process.env.JND_NO_LANDING_PACK !== '1') landingPack = createLandingPack({
+      dir: path.join(app.getPath('userData'), 'landing-pack'), seedDir: path.join(__dirname, 'landing-seed'), log,
+      fetch: url => net.fetch(url, { headers: { referer: 'https://web.sanguosha.com/' }, referrerPolicy: 'unsafe-url', bypassCustomProtocolHandlers: true } as any),
     });
+    if (!SHARED_CACHE) return;
+    normalizeUserAgent(electron_.session.defaultSession); /* 共享资源用默认 session 取：对站点同样呈现为普通 Chrome */
+    electron_.protocol.handle('jnd-asset', serveSharedAsset);
+  }
+  // 对站点呈现为普通 Chrome：去掉 Electron 默认 UA 里的应用名与 Electron 标记。
+  function cleanUserAgent(ua: string) {
+    const appToken = `${app.getName()}/${app.getVersion()}`;
+    return ua.replace(/\s+Electron\/\S+/i, '').split(` ${appToken}`).join('').replace(/\s+[A-Za-z0-9_.-]*jinnangdai[A-Za-z0-9_.-]*\/\S+/i, '').replace(/\s+\S*[^\x20-\x7e]\S*\/\S+/g, '')
+      .replace(/[^\x20-\x7e]+/g, '').replace(/\s{2,}/g, ' ').trim(); // 产品名是中文时也要去掉，UA 里不能有非 ASCII
+  }
+  function normalizeUserAgent(session) {
+    try { session.setUserAgent(cleanUserAgent(session.getUserAgent())); } catch (error) { log('user agent normalize failed', error?.message || error); }
   }
 
   function configureSession(session) {
     if (configuredSessions.has(session)) return;
     configuredSessions.add(session);
-    installSharedAssetRedirect(session);
-    // 对站点呈现为普通 Chrome：去掉 Electron 默认 UA 里的应用名与 Electron 标记。
-    try {
-      const appToken = `${app.getName()}/${app.getVersion()}`;
-      const ua = session.getUserAgent().replace(/\s+Electron\/\S+/i, '').split(` ${appToken}`).join('').replace(/\s+[A-Za-z0-9_.-]*jinnangdai[A-Za-z0-9_.-]*\/\S+/i, '').replace(/\s+\S*[^\x20-\x7e]\S*\/\S+/g, ''); // 产品名是中文时也要去掉，UA 里不能有非 ASCII
-      session.setUserAgent(ua);
-    } catch (error) { log('user agent normalize failed', error?.message || error); }
+    if (SHARED_CACHE) {
+      try { if (!session.protocol.isProtocolHandled('jnd-asset')) session.protocol.handle('jnd-asset', serveSharedAsset); } catch (error) { log('shared asset scheme failed', error?.message || error); }
+    }
+    normalizeUserAgent(session);
+    installSessionHooks(session);
+    /* 页面唤起外部程序（auth://、weixin:// 之类）一律拒：否则系统弹「没有程序能打开此地址」（作者 10-21 实机，QQ 授权页试图唤起手机 QQ）。只记一行，不弹框 */
+    session.setPermissionRequestHandler((_wc, permission, callback, details) => {
+      if (permission === 'openExternal') { let scheme = ''; try { scheme = new URL(String(details?.externalURL || '')).protocol; } catch (_) {} log('external protocol blocked', scheme || '?'); callback(false); return; }
+      callback(true);
+    });
+  }
+  // 会话上的网络监听。Electron 33：会话上挂着任何 webRequest 监听器时，protocol.handle('https') 接管的响应会失败或卡死（实测），
+  // 所以私有登录页出文档那一下要先摘、出完再装（loadEntry）
+  function installSessionHooks(session) {
+    const started = new Map<number, number>();
+    installRequestHooks(session, started);
     // 官方登录接口的请求结果与耗时写日志：落地页的「请求超时」alert 来自它 5 秒的 XHR 超时。
     const loginApi = { urls: ['https://web-login-api.sanguosha.com/*', 'https://web-login-apitest.sanguosha.com/*'] };
-    const started = new Map();
-    session.webRequest.onBeforeRequest(loginApi, (details, callback) => { started.set(details.id, Date.now()); callback({}); });
     session.webRequest.onCompleted(loginApi, details => {
       const ms = Date.now() - (started.get(details.id) || Date.now()); started.delete(details.id);
       log('login-api', details.method, details.url.split('?')[0], 'status=', details.statusCode, 'ms=', ms);
@@ -220,11 +305,28 @@ export = function startMicroClient(config) {
       callback({ responseHeaders: headers });
     });
   }
+  function removeSessionHooks(session) {
+    for (const ev of ['onBeforeRequest', 'onCompleted', 'onErrorOccurred', 'onHeadersReceived']) { try { session.webRequest[ev](null); } catch (_) {} }
+  }
 
-  function showErrorPage(contents, text) {
-    const html = `<meta charset="utf-8"><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#1a1a1a;color:#fff;font:13px/1.7 'Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI',sans-serif;text-align:center"><div><h2 style="margin:0 0 6px;font-size:14px;font-weight:400">页面没能加载</h2><p style="margin:0;color:rgba(255,255,255,.78)">${escapeHtml(text)}</p><p style="margin:14px 0 0;color:rgba(255,255,255,.45);font-size:11px">详情已写入程序目录的 ${escapeHtml(channel.logName)}</p></div></body>`;
+  function showErrorPage(contents, text, error?: { code?: string; errno?: number }) {
+    // A new navigation cancels the previous loadURL promise. It is not a
+    // failed destination: loading an error page here would replace that new
+    // navigation from inside Electron's did-start-navigation notification.
     if (contents.isDestroyed()) return;
-    contents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(error => log('error page failed', error?.message || error));
+    if (error?.code === 'ERR_ABORTED' || error?.errno === -3) {
+      log('login-trace navigation superseded webContents=', contents.id);
+      return;
+    }
+    const html = `<meta charset="utf-8"><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#1a1a1a;color:#fff;font:13px/1.7 'Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI',sans-serif;text-align:center"><div><h2 style="margin:0 0 6px;font-size:14px;font-weight:400">页面没能加载</h2><p style="margin:0;color:rgba(255,255,255,.78)">${escapeHtml(text)}</p><p style="margin:14px 0 0;color:rgba(255,255,255,.45);font-size:11px">详情已写入程序目录的 ${escapeHtml(channel.logName)}</p></div></body>`;
+    clearImmediate(pendingErrorPages.get(contents));
+    const pending = setImmediate(() => {
+      if (pendingErrorPages.get(contents) !== pending) return;
+      pendingErrorPages.delete(contents);
+      if (contents.isDestroyed()) return;
+      contents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(error => log('error page failed', error?.message || error));
+    });
+    pendingErrorPages.set(contents, pending);
   }
 
   function handleRendererGone(contents, details) {
@@ -249,8 +351,6 @@ export = function startMicroClient(config) {
   // ===== 查找：IPC 发送方 → 窗口记录／标签记录 =====
   function windowOfChrome(sender) { for (const [, record] of windows) if (record.chromeContents === sender) return record; return null; }
   function tabOf(sender): { record: WinRecord; tab: TabRecord } | null {
-    const authTab = authWindowOwners.get(sender);
-    if (authTab && !authTab.contents.isDestroyed()) return { record: authTab.owner, tab: authTab };
     for (const [, record] of windows) for (const [, tab] of record.tabs) if (tab.contents === sender) return { record, tab };
     return null;
   }
@@ -267,10 +367,11 @@ export = function startMicroClient(config) {
     const { win } = record;
     if (win.isDestroyed()) return;
     const { width, height } = win.getContentBounds();
-    const chromeBounds = record.covered ? { x: 0, y: 0, width, height } : { x: 0, y: 0, width, height: TITLE_HEIGHT };
+    /* 全屏时没有标题栏：chrome 层平时收成 0 高，只在对话框／扫码卡／菜单盖上来时铺满 */
+    const chromeBounds = record.covered ? { x: 0, y: 0, width, height } : { x: 0, y: 0, width, height: win.isFullScreen() ? 0 : TITLE_HEIGHT };
     const chromeKey = JSON.stringify(chromeBounds);
     if (record.chromeKey !== chromeKey) { record.chromeKey = chromeKey; record.chrome.setBounds(chromeBounds); }
-    const bounds = viewportBounds(width, height);
+    const bounds = viewportBounds(width, height, win.isFullScreen());
     const viewKey = JSON.stringify(bounds);
     if (record.viewKey !== viewKey) {
       record.viewKey = viewKey;
@@ -279,9 +380,64 @@ export = function startMicroClient(config) {
     record.overlays.relayout();
   }
   // 把标签的视图提到最上（chrome 与叠层再压回它们之上）；View.addChildView 对已有子视图就是重排
+  // 登录录制器（login-recorder.ts，开发版专用）：Ctrl+Shift+Alt+R（macOS Cmd+Shift+Option+R）打开独立小窗。窗口用系统边框：拖动、最小化、恢复都是系统的
+  let recorderWin = null;
+  const RECORDER_LABELS = { idle: '未录制', recording: '录制中', paused: '已暂停', stopped: '已停止' };
+  function recorderPage() {
+    return `<!doctype html><meta charset="utf-8"><title>登录录制器</title><style>
+      body{margin:0;padding:14px 16px;font:13px/1.6 -apple-system,"PingFang SC","Segoe UI","Microsoft YaHei UI",sans-serif;color:#1b1b1f;background:#fff;-webkit-user-select:none;user-select:none}
+      .st{display:flex;align-items:center;gap:8px;height:22px}.dot{width:8px;height:8px;border-radius:50%;background:#c9c9cd}.rec .dot{background:#cd8676}
+      .n{color:#5c5c63;margin-left:auto}.err{min-height:20px;color:#b4534a;font-size:12px}
+      .row{display:flex;gap:6px;margin-top:8px}button{flex:1;height:28px;font:inherit;border:1px solid #e1e1e3;background:#fff;color:#1b1b1f;border-radius:6px;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent}
+      button:hover:not(:disabled){background:#f3f3f3}button:disabled{color:#b8b8bd;cursor:default}
+    </style><div class="st" id="st"><span class="dot"></span><span id="label"></span><span class="n" id="n"></span></div><div class="err" id="err"></div>
+    <div class="row"><button id="start">录制</button><button id="pause">暂停</button><button id="resume">继续</button><button id="stop">停止</button></div>
+    <div class="row"><button id="clear">清空</button><button id="copy">复制</button><button id="export">导出</button></div>
+    <script>
+      const L=${JSON.stringify(RECORDER_LABELS)};const $=id=>document.getElementById(id);
+      for(const id of ['start','pause','resume','stop','clear','copy','export'])$(id).onclick=()=>window.jndRecorder.cmd(id);
+      window.jndRecorder.onState(s=>{$('label').textContent=L[s.status]||s.status;$('n').textContent=s.count+' 条'+(s.dropped?'（最早的 '+s.dropped+' 条已滚出）':'');$('err').textContent=s.error||s.note||'';
+        $('st').className='st'+(s.status==='recording'?' rec':'');
+        $('start').disabled=s.status==='recording'||s.status==='paused';$('pause').disabled=s.status!=='recording';$('resume').disabled=s.status!=='paused';$('stop').disabled=!(s.status==='recording'||s.status==='paused');
+        $('clear').disabled=$('copy').disabled=$('export').disabled=!s.count;});
+    </script>`;
+  }
+  let recorderNote = '';
+  function pushRecorderState() { if (recorderWin && !recorderWin.isDestroyed()) recorderWin.webContents.send('jnd-recorder-state', { ...loginRecorder.state(), note: recorderNote }); }
+  loginRecorder.onChange(pushRecorderState);
+  function openLoginRecorder() {
+    if (app.isPackaged && process.env.JND_DEV !== '1') return; /* 录制器只在开发版：正式版不指望玩家操作任何东西（作者 10-21），证据自动进日志 */
+    if (recorderWin && !recorderWin.isDestroyed()) { if (recorderWin.isMinimized()) recorderWin.restore(); recorderWin.show(); recorderWin.focus(); return; }
+    recorderWin = new BrowserWindow({ width: 360, height: 168, useContentSize: true, title: '登录录制器', resizable: false, maximizable: false, minimizable: true, fullscreenable: false, alwaysOnTop: true, show: false, backgroundColor: '#ffffff',
+      webPreferences: { preload: path.join(__dirname, 'recorder-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
+    recorderWin.setMenuBarVisibility?.(false);
+    recorderWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(recorderPage())}`).catch(error => log('recorder load failed', error?.message || error));
+    recorderWin.once('ready-to-show', () => recorderWin?.show());
+    recorderWin.on('closed', () => { recorderWin = null; }); /* 关窗不停止、不清空：再按快捷键打开，记录还在 */
+    log('login recorder opened');
+  }
+  function installRecorderIpc() {
+  ipcMain.on('jnd-recorder-cmd', async (event, cmd) => {
+    if (!recorderWin || event.sender !== recorderWin.webContents) return;
+    recorderNote = '';
+    try {
+      if (cmd === 'start') loginRecorder.start(); else if (cmd === 'pause') loginRecorder.pause(); else if (cmd === 'resume') loginRecorder.resume();
+      else if (cmd === 'stop') loginRecorder.stop(); else if (cmd === 'clear') loginRecorder.clear();
+      else if (cmd === 'copy') { clipboard.writeText(loginRecorder.dump()); recorderNote = '已复制到剪贴板'; }
+      else if (cmd === 'export') {
+        const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+        const r = process.env.JND_RECORDER_EXPORT_PATH ? { canceled: false, filePath: process.env.JND_RECORDER_EXPORT_PATH } /* 仅端到端测试：不弹系统对话框 */ : await dialog.showSaveDialog(recorderWin, { defaultPath: path.join(app.getPath('downloads'), `锦囊妙计-登录录制-${stamp}.json`), filters: [{ name: 'JSON', extensions: ['json'] }] });
+        if (!r.canceled && r.filePath) { fs.writeFileSync(r.filePath, loginRecorder.dump()); recorderNote = `已导出：${path.basename(r.filePath)}`; }
+      }
+      loginRecorder.setError('');
+    } catch (error) { loginRecorder.setError(`${cmd === 'export' ? '导出' : cmd === 'copy' ? '复制' : '操作'}失败：${error?.message || error}`); log('login recorder error', cmd, error?.message || error); }
+    pushRecorderState();
+  });
+  }
+  function isFullscreenEsc(win, input) { return input.type === 'keyDown' && input.key === 'Escape' && !input.control && !input.meta && !input.alt && !input.shift && !win.isDestroyed() && win.isFullScreen(); }
   function raiseTab(record: WinRecord, tab: TabRecord) {
     const cv = record.win.contentView;
-    try { cv.addChildView(tab.view); cv.addChildView(record.chrome); record.overlays.raise(); } catch (error) { log('raise tab failed', error?.message || error); }
+    try { cv.addChildView(tab.view); cv.addChildView(record.chrome); record.overlays.raise(); if (tab.webSheet) cv.addChildView(tab.webSheet.view); } catch (error) { log('raise tab failed', error?.message || error); }
   }
   function pushTabState(record: WinRecord, tab: TabRecord, extra: Record<string, unknown> = {}) {
     const c = tab.contents; if (c.isDestroyed()) return;
@@ -320,29 +476,34 @@ export = function startMicroClient(config) {
       },
     });
     const contents = view.webContents;
-    const providerId = known ? known.provider : msg.provider ? (providerByLabel(msg.provider)?.id || '') : '';
+    const providerId = known ? known.provider : msg.provider ? (PROVIDERS.find(p => p.label === msg.provider)?.id || '') : '';
     if (!known) setContainer(slot, { entryId: entry.id, provider: '', nick: '', uid: '', status: 'none' }); // 新容器：方式等统一登录器完成后再写
-    const tab: TabRecord = { id: msg.id, owner: record, view, contents, slot, entryId: entry.id, provider: providerId, pendingCredential: null,
-      loginProvider: null, loginOptionId: '', loginMode: '', loginNonce: '', loginState: '', loginAuthCompleted: false, loginWindow: null,
-      loginSeen: '', loginPrev: null, preferredAccount: String(msg.account || ''), lastAccount: '', muted: false, nick: '', uid: '' };
+    const tab: TabRecord = { id: msg.id, owner: record, view, contents, slot, entryId: entry.id, pendingCredential: null, loginProvider: null, loginRequest: 0, loginSeen: '', loginRetries: 0, qrModel: null, preferredAccount: String(msg.account || ''), lastAccount: '', muted: false, nick: '', uid: '' };
     record.tabs.set(msg.id, tab);
     const { win } = record; // 建视图时用；之后一律走 tab.owner（标签可被拖进别的窗口）
     win.contentView.addChildView(view, 0); // 先垫底；引擎随后发 activate 才提到最上
-    try { view.setBackgroundColor('#1a1a1a'); } catch (_) {} // 页面出第一帧前是深底，不是白闪
+    try { view.setBackgroundColor('#fafafa'); } catch (_) {} // 页面出第一帧前的底色：浅色（作者 10-21 否掉深色；三点加载层方案见 design/loading-options.html，待审）
     // 圆角由视图裁（JND_NO_VIEW_RADIUS=1 可关掉做性能对照）
     if (process.env.JND_NO_VIEW_RADIUS !== '1') { try { if (typeof view.setBorderRadius === 'function') view.setBorderRadius(FRAME.radius - 1); } catch (_) {} }
-    { const { width, height } = win.getContentBounds(); view.setBounds(viewportBounds(width, height)); }
+    { const { width, height } = win.getContentBounds(); view.setBounds(viewportBounds(width, height, win.isFullScreen())); }
     if (uiSettings().muteNew) { contents.setAudioMuted(true); tab.muted = true; }
     configureSession(contents.session);
     attachMainInjector(contents, { matches: matchesGame, log });
     const tag = `slot=${slot} tab=${msg.id}`;
-    /* 2026-10-20 一次主进程段错误发生在 NavigationRequest::StartNavigation → DidStartNavigation 里（页面自己 location.assign 跳游戏页时）。
-       这条链上我们唯一同步跑的 JS 是 did-start-loading 里的 pushTabState（navigationHistory／getOSProcessId／getAppMetrics）。
-       改成下一拍再推，导航起步时不再回调进 WebContents；这是减法式的规避，不是已证实的根因 */
+    // 状态查询留到导航通知结束后；loadURL 中止与错误页导航另由 showErrorPage 处理。
     const pushLater = () => { if (!contents.isDestroyed()) setImmediate(() => { if (!contents.isDestroyed()) pushTabState(tab.owner, tab); }); };
     contents.on('did-start-loading', () => { log('did-start-loading', tag); pushLater(); });
     contents.on('did-stop-loading', pushLater);
     contents.on('audio-state-changed', pushLater);
+    /* 记下官服登录页实际选中的背景（官方页 load 常常十几秒都不触发，按 dom-ready 后等 4 秒读） */
+    contents.on('dom-ready', () => {
+      if (!landingPack || !landingPack.isDoc(contents.getURL())) return;
+      setTimeout(() => {
+        if (contents.isDestroyed() || !landingPack?.isDoc(contents.getURL())) return;
+        contents.executeJavaScript('(() => { const v = document.getElementById("sgsBgVideo"), d = document.getElementById("sgsVideoImg"); const m = d && /url\\(["\']?([^"\')]+)/.exec(d.style.backgroundImage || ""); return { mp4: v ? v.getAttribute("src") : "", img: m ? m[1] : "" }; })()', true)
+          .then(bg => landingPack?.noteBackground(bg)).catch(() => {});
+      }, 4000);
+    });
     contents.on('did-finish-load', () => {
       const url = contents.getURL();
       log('did-finish-load', tag, 'url=', url);
@@ -351,8 +512,15 @@ export = function startMicroClient(config) {
       let parsed = null;
       try { parsed = new URL(url); } catch (_) {}
       if (parsed && /^https?:$/.test(parsed.protocol) && !matchesGame(parsed)) {
-        contents.insertCSS('html,body{overflow:hidden!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}')
+        contents.insertCSS('::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}' + landingTrimCss(parsed.hostname)) /* 只藏滚动条、不禁滚：比窗口长的门户页（4399 官网 5269 高、百度 1692）要能滚到首屏以下；放得下的页由 preload 的适配锁住（作者 10-21） */
           .catch(error => log('landing css failed', error?.message || error));
+      }
+    });
+    contents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
+      if (isMainFrame && !inPlace) {
+        tab.loginBridgeReady = false;
+        clearImmediate(pendingErrorPages.get(contents));
+        pendingErrorPages.delete(contents);
       }
     });
     contents.on('did-frame-navigate', (_event, url, code, text, isMainFrame) => {
@@ -364,7 +532,7 @@ export = function startMicroClient(config) {
       let parsed = null;
       try { parsed = new URL(url); } catch (_) {}
       if (!parsed || !matchesGame(parsed)) return;
-      if (tab.loginProvider) { tab.loginProvider = null; tab.loginPrev = null; qrClose(tab.owner, tab, 'game-started'); }
+      if (tab.loginProvider) { tab.loginProvider = null; qrClose(tab.owner, tab, 'game-started'); }
       if (!contents.isDestroyed()) contents.send('jnd-landing-game-started');
       settleCredential(tab.owner, tab);
     };
@@ -377,7 +545,7 @@ export = function startMicroClient(config) {
     });
     contents.on('did-frame-navigate', (_event, url, _code, _text, isMainFrame) => { if (!isMainFrame) onGameFrame(url); });
     contents.on('console-message', (_event, level, message, line, sourceId) => {
-      if (/JND-MICRO|锦囊袋|注入|统一登录器/i.test(message)) {
+      if (/JND-MICRO|锦囊袋|注入|统一登录器/i.test(message) || /jnd-plugin-/.test(String(sourceId || '')) || (level >= 2 && /\.user\.js/.test(String(sourceId || '')))) { /* 插件自己的 console 与报错也进日志，否则「不生效」没法查 */
         log('CONSOLE', tag, 'level=', level, 'message=', message, 'line=', line, 'source=', sourceId);
       }
     });
@@ -415,17 +583,20 @@ export = function startMicroClient(config) {
     // 游戏视图有焦点时的壳快捷键：转给 chrome 引擎同名命令
     contents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown') return;
+      /* 全屏时 Esc 退出（作者 10-21，两个平台）：游戏画面有焦点时键先到这里 */
+      if (isFullscreenEsc(tab.owner.win, input)) { event.preventDefault(); log('fullscreen esc from=game'); tab.owner.win.setFullScreen(false); return; }
       if (handleMacEditShortcut(contents, input, tab.owner.win)) { event.preventDefault(); return; }
       const name = shortcutName(input);
       if (!name) return;
       event.preventDefault();
       chromeSend(tab.owner, 'jnd-chrome-command', name);
     });
-    // 第三方方式的新标签：由 startProviderLogin 自己加载官服登录页再发起扫码——同一拍里对刚建的 WebContents 连发两次 loadURL 会把主进程段错误掉（已复现）
+    // 第三方方式的新标签只由 startProviderLogin 发起入口导航；后续切换登录方式复用在途导航。
+    if (known && msg.restored) log('login-trace restore slot=', slot, 'entry=', entry.id, 'provider=', providerId || '-', 'status=', known.status, 'nick=', known.nick ? 'yes' : 'no', 'gmSession=', fs.existsSync(path.join(gmStoreDirectory(), `slot-${slot}`, 'unified-login.json')) ? 'file' : 'none'); /* 恢复后登没登上看随后的 landing／identity／ready 行 */
     if (providerId && !msg.restored) startProviderLogin(tab.owner, tab, providerId); // 恢复出来的第三方标签不重走扫码，分区里的登录态还在
-    else contents.loadURL(entryUrl(entry)).catch(error => {
+    else loadEntry(contents, entryUrl(entry)).catch(error => {
       log('loadURL-threw', error?.message || error);
-      showErrorPage(contents, `无法加载入口：${error?.message || error}`);
+      showErrorPage(contents, `无法加载入口：${error?.message || error}`, error);
     });
     if (process.env.JND_DEVTOOLS === '1') contents.openDevTools({ mode: 'detach' });
     log('tab created', tag, 'entry=', entry.id);
@@ -442,16 +613,20 @@ export = function startMicroClient(config) {
   }
   function shortcutName(input) {
     const k = String(input.key || '').toLowerCase(), c = input.control || input.meta;
+    if (c && input.shift && input.alt && input.code === 'KeyR') return 'recorder';
     if (c && input.shift && k === 'a') return 'tabList'; if (c && input.shift && k === 'm') return 'pm'; if (c && input.shift && k === 's') return 'settings';
     if (c && !input.shift && k === 't') return 'newTab'; if (c && !input.shift && k === 'w') return 'closeTab';
     if (c && k === 'tab') return input.shift ? 'prevTab' : 'nextTab';
     if (input.alt && k === 'f') return 'menu';
+    if (!IS_MAC && k === 'f11') return 'fullscreen';
+    if (IS_MAC && input.control && input.meta && k === 'f') return 'fullscreen'; // macOS 没有应用菜单，系统的 Ctrl+Cmd+F 不会自己生效
     return null; // 刷新／前进／后退留给游戏页自己（Ctrl+R 在 Laya 页里也该是整页刷新，由标签栏按钮走壳的路径）
   }
   const partitionName = (slot: number) => `persist:jinnangdai-${channel.id}-${slot}`;
   // 清掉一个容器：cookie／localStorage／缓存（资源缓存在默认 session，清这里不影响共享缓存）＋该槽位的 GM 文件
   function wipeSlot(slot: number) {
-    try { const ses = electron_.session.fromPartition(partitionName(slot)); ses.clearStorageData().catch(error => log('wipe slot failed', slot, error?.message || error)); } catch (error) { log('wipe slot failed', slot, error?.message || error); }
+    /* clearStorageData 不清 HTTP 缓存：每个关掉的槽位原来都留着整份游戏资源缓存（作者本机 41 个分区 1.9 GB，单个 300 MB）。目录本身在下次启动时回收 */
+    try { const ses = electron_.session.fromPartition(partitionName(slot)); ses.clearStorageData().catch(error => log('wipe slot failed', slot, error?.message || error)); ses.clearCache().catch(error => log('wipe slot cache failed', slot, error?.message || error)); } catch (error) { log('wipe slot failed', slot, error?.message || error); }
     for (const key of [...gmStores.keys()]) if (key.startsWith(`slot-${slot}/`)) { gmStores.delete(key); clearTimeout(gmFlushTimers.get(key)); }
     try { fs.rmSync(path.join(gmStoreDirectory(), `slot-${slot}`), { recursive: true, force: true }); } catch (_) {}
     delete containers[slot]; if (!containersTimer) containersTimer = setTimeout(flushContainers, 300);
@@ -487,43 +662,76 @@ export = function startMicroClient(config) {
   function closeTab(record: WinRecord, id: number, fromGame = false, opts: { wipe?: boolean } = {}) {
     const tab = record.tabs.get(id);
     if (!tab) return;
-    closeAuthWindow(tab);
+    tab.webSheet?.close('tab-closed');
     record.tabs.delete(id);
     record.order = record.order.filter(x => x !== id);
     clearTimeout(recoveryTimers.get(tab.contents)); recoveryTimers.delete(tab.contents);
-    try { record.win.contentView.removeChildView(tab.view); } catch (_) {}
-    // WebContentsView 不随父窗口自动析构，必须显式归还 renderer。
-    if (!tab.contents.isDestroyed()) tab.contents.close({ waitForBeforeUnload: false });
+    // 关的是眼前这个、窗口里还有别的标签：画面先留在最上面挡着，等下一个标签真正画出来再撤（作者 10-21：关闭时闪、跳）。
+    // 标签栏是先发「关闭」再发「激活相邻标签」，原来这里立刻撤掉，中间什么都不挡、露出底色
+    if (record.active === tab && record.tabs.size > 0) {
+      record.active = null; dropLeaving(record);
+      try { tab.contents.setAudioMuted(true); } catch (_) {}
+      record.leaving = tab; record.leavingTimer = setTimeout(() => dropLeaving(record), 1200);
+    } else disposeTabView(record, tab);
     occupiedSlots.delete(tab.slot);
     if (tab.loginProvider) qrClose(record, tab, 'tab-closed');
     log('tab closed slot=', tab.slot, 'tab=', id);
     if (opts.wipe) { const c = getContainer(tab.slot); if (c.nick || c.status !== 'none') rememberClosed(tab); else wipeSlot(tab.slot); }
     if (fromGame) chromeSend(record, 'jnd-chrome-command', 'closeTab');
   }
-  // 切标签：先把目标视图设为可见（它还在旧视图下面，空白的第一帧看不见），等它出两帧再提到最上，然后把其余游戏视图隐藏——
+  function disposeTabView(record: WinRecord, tab: TabRecord) {
+    try { record.win.contentView.removeChildView(tab.view); } catch (_) {}
+    // WebContentsView 不随父窗口自动析构，必须显式归还 renderer。
+    if (!tab.contents.isDestroyed()) tab.contents.close({ waitForBeforeUnload: false });
+  }
+  function dropLeaving(record: WinRecord) {
+    clearTimeout(record.leavingTimer); record.leavingTimer = null;
+    const tab = record.leaving; record.leaving = null;
+    if (tab) disposeTabView(record, tab);
+  }
+  // 画面真的合成出来了没有：向合成器要一块 1×1 的拷贝，没有可用的帧时拿到的是空图。
+  // 原来等页面里两次 requestAnimationFrame——那只说明渲染进程排了帧，不说明窗口里已经能显示（审计实测 0.3–1.5ms 就返回）
+  async function whenPainted(tab: TabRecord, budgetMs: number) {
+    const until = Date.now() + budgetMs, contents = tab.contents;
+    while (Date.now() < until && !contents.isDestroyed()) {
+      try {
+        const b = tab.view.getBounds();
+        const img = await Promise.race([contents.capturePage({ x: Math.floor(b.width / 2), y: Math.floor(b.height / 2), width: 1, height: 1 }), new Promise(r => setTimeout(() => r(null), 120))]) as any;
+        if (img && !img.isEmpty()) return true;
+      } catch (_) {}
+      await new Promise(r => setTimeout(r, 16));
+    }
+    return false;
+  }
+  // 切标签：先把目标视图设为可见（它还在旧视图下面，空白的第一帧看不见），等它真正有可显示的画面再提到最上，然后把其余游戏视图隐藏——
   // 隐藏的视图不渲染也不占 GPU（两个标签把风扇吹起来就是因为之前全部常驻）；内页标签时当前游戏视图留着（在内页下面，切回来不闪）
   function activateTab(record: WinRecord, id: number, kind: string) {
+    for (const [, other] of record.tabs) if (other.id !== id) other.webSheet?.close('tab-switched'); /* 浮层属于它的标签，换标签就收起 */
     record.cur = id; record.curKind = kind;
     setTitle(record);
     const tab = record.tabs.get(id);
     if (!tab || kind !== 'game' || tab.contents.isDestroyed()) return;
     const settle = () => {
-      if (record.cur !== id || tab.contents.isDestroyed()) return;
-      raiseTab(record, tab); record.active = tab;
+      if (record.closing || record.win.isDestroyed() || record.cur !== id || record.curKind !== 'game'
+        || record.tabs.get(id) !== tab || tab.owner !== record || tab.contents.isDestroyed()) return;
+      raiseTab(record, tab); record.active = tab; dropLeaving(record);
       for (const [, other] of record.tabs) if (other !== tab && !other.contents.isDestroyed()) { try { other.view.setVisible(false); } catch (_) {} }
-      tab.contents.focus(); pushTabState(record, tab);
+      restoreWindowFocus(record); pushTabState(record, tab);
     };
     if (record.active === tab) { settle(); return; }
     try { tab.view.setVisible(true); } catch (_) {}
-    const painted = tab.contents.executeJavaScript('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))', true).catch(() => 0);
-    Promise.race([painted, new Promise(r => setTimeout(r, 150))]).then(settle, settle);
+    const t0 = Date.now();
+    /* 新标签：官服登录页私有化后约 150ms 出完整画面，等它画好再换上，期间旧画面挡着，不露深色底；上限 300ms（网络入口出不来就先换上）。切回已有画面的标签实测 3–14ms */
+    const budget = tab.shownOnce ? 600 : 300; tab.shownOnce = true;
+    whenPainted(tab, budget).then(ok => { log('tab shown slot=', tab.slot, 'painted=', ok, 'ms=', Date.now() - t0); settle(); }, settle);
   }
   // 把标签拖成新窗口：视图跟着搬家，新窗口跟着鼠标走到松手
   function detachTab(record: WinRecord, msg: { id: number; x: number; y: number; grabX: number; kind?: string }) {
     if (msg.kind && msg.kind !== 'game') { // 内页标签拖出：新窗口只开这个内页
       const [width, height] = record.win.getSize();
-      const target = createWindow({ pageKind: msg.kind, bounds: { x: Math.round(Number(msg.x) - Number(msg.grabX) - 102), y: Math.round(Number(msg.y) - TITLE_HEIGHT / 2), width, height } });
-      const next = windows.get(target); if (next) startFollow(next, Number(msg.grabX) + 102, TITLE_HEIGHT / 2, true);
+      const PAGE_LEFT = 102 + (IS_MAC ? MAC_INSET : 0);
+      const target = createWindow({ pageKind: msg.kind, bounds: { x: Math.round(Number(msg.x) - Number(msg.grabX) - PAGE_LEFT), y: Math.round(Number(msg.y) - TITLE_HEIGHT / 2), width, height } });
+      const next = windows.get(target); if (next) startFollow(next, Number(msg.grabX) + PAGE_LEFT, TITLE_HEIGHT / 2, true);
       return;
     }
     const tab = record.tabs.get(Number(msg.id));
@@ -531,7 +739,7 @@ export = function startMicroClient(config) {
     record.tabs.delete(tab.id); record.order = record.order.filter(x => x !== tab.id); if (record.active === tab) record.active = null;
     try { record.win.contentView.removeChildView(tab.view); } catch (_) {}
     const [width, height] = record.win.getSize();
-    const TAB_LEFT = 102; // 新窗口里第一个标签的左沿：导航三键（6＋28×3＋2×2）＋ 条内边距 6
+    const TAB_LEFT = 102 + (IS_MAC ? MAC_INSET : 0); // 新窗口里第一个标签的左沿：导航三键（6＋28×3＋2×2）＋ 条内边距 6；macOS 再加红绿灯让位
     const x = Math.round(Number(msg.x) - Number(msg.grabX) - TAB_LEFT), y = Math.round(Number(msg.y) - TITLE_HEIGHT / 2);
     const target = createWindow({ adopt: tab, bounds: { x, y, width, height } });
     const next = windows.get(target);
@@ -576,11 +784,21 @@ export = function startMicroClient(config) {
   function adoptTab(record: WinRecord, id: number) {
     const tab = record.pendingAdopt; record.pendingAdopt = null;
     if (!tab) return false;
+    const card = tab.qrModel; if (card) chromeSend(tab.owner, 'jnd-chrome-qr', { action: 'close', id: tab.id }); /* 旧窗口按旧编号收卡 */
     tab.id = id; tab.owner = record; record.tabs.set(id, tab); record.order.push(id);
+    if (card && tab.loginProvider) chromeSend(record, 'jnd-chrome-qr', { action: 'open', id, ...card }); /* 新窗口按新编号原样重开（审计 C4） */
+    else tab.qrModel = null;
     record.win.contentView.addChildView(tab.view, 0);
-    const { width, height } = record.win.getContentBounds(); tab.view.setBounds(viewportBounds(width, height)); try { tab.view.setVisible(true); } catch (_) {}
+    registerTaskWindow(record);
+    const { width, height } = record.win.getContentBounds(); tab.view.setBounds(viewportBounds(width, height, record.win.isFullScreen())); try { tab.view.setVisible(true); } catch (_) {}
     pushTabState(record, tab);
     return true;
+  }
+  /* 登录一确认就把这个容器的 cookie 与 GM 会话落盘：Chromium 的 cookie 是定期提交的，崩溃或被强制结束会丢掉最近的登录（恢复后落回未登录） */
+  function commitLogin(tab: TabRecord, why: string) {
+    try { void tab.contents.session.cookies.flushStore().catch(error => log('cookie flush failed', tab.slot, error?.message || error)); } catch (_) {}
+    for (const key of [...gmFlushTimers.keys()]) if (key.startsWith(`slot-${tab.slot}/`)) { clearTimeout(gmFlushTimers.get(key)); gmWrite(key); }
+    log('login-trace commit slot=', tab.slot, 'why=', why);
   }
   /* 退出本容器的账号：清该槽位的分区存储与 GM 文件（统一登录器的会话也在 GM 里），槽位与标签保留 */
   async function logoutSlot(tab: TabRecord) {
@@ -592,135 +810,173 @@ export = function startMicroClient(config) {
   function switchEntry(record: WinRecord, tab: TabRecord, entryId: string, opts: { logout?: boolean } = {}) {
     const entry = entryById(entryId);
     if (!entry || tab.contents.isDestroyed()) return;
-    const from = `${tab.entryId}${tab.provider ? '+' + tab.provider : ''}`;
-    tab.entryId = entry.id; tab.provider = '';
+    const was = getContainer(tab.slot); const from = `${tab.entryId}${was.provider ? '+' + was.provider : ''}`;
+    tab.entryId = entry.id;
     setContainer(tab.slot, { entryId: entry.id, provider: '', nick: '', uid: '', status: 'none' });
     tab.pendingCredential = null;
-    if (tab.loginProvider) { tab.loginProvider = null; closeAuthWindow(tab); qrClose(record, tab, 'switch-entry'); }
-    tab.loginMode = ''; tab.loginOptionId = ''; tab.loginNonce = ''; tab.loginState = ''; tab.loginAuthCompleted = false;
-    writeSettings({ lastEntry: entry.id, guideDone: true });
+    if (tab.loginProvider) { tab.loginProvider = null; qrClose(record, tab, 'switch-entry'); }
+    writeSettings({ guideDone: true });
     setTitle(record);
     log('login-trace switch entry slot=', tab.slot, 'from=', from, 'to=', entry.id, 'logout=', Boolean(opts.logout), entry.verified ? '' : '(unverified)');
-    const go = () => tab.contents.loadURL(entryUrl(entry)).catch(error => showErrorPage(tab.contents, `无法加载入口：${error?.message || error}`));
+    const go = () => loadEntry(tab.contents, entryUrl(entry)).catch(error => showErrorPage(tab.contents, `无法加载入口：${error?.message || error}`, error));
     if (opts.logout) logoutSlot(tab).then(go); else go();
   }
 
   /* 扫码卡由 chrome 引擎画（与 harness 同一份）。阶段映射统一登录器快照：
      error → error；stage ready → 收卡（换票完成，登录框里是登录器自己的面板，玩家自己点「进入游戏」）；
-     waiting_confirmation → confirm；有二维码 → scan；码没了且已扫过 → exchanging；其余 → loading。 */
-  function qrOpen(record: WinRecord, tab: TabRecord, provider: { id: string; label: string; mode?: string; brand?: string }) {
+     waiting_confirmation → confirm；请求中的轮询保留 confirm；有二维码 → scan；码没了且已扫过 → exchanging；其余 → loading。 */
+  /* 卡的三个动作都经这里：记住最后的样子（拖拽重开用）；卡已开着时「打开」只更新，不重建整张卡 */
+  function qrUpdate(tab: TabRecord, model: QrMsg) {
+    tab.qrModel = model;
+    chromeSend(tab.owner, 'jnd-chrome-qr', { action: 'update', id: tab.id, ...model });
+  }
+  function qrOpen(record: WinRecord, tab: TabRecord, provider: { id: string; label: string }) {
     tab.loginSeen = 'loading';
-    chromeSend(record, 'jnd-chrome-qr', { action: 'open', id: tab.id, provider: provider.label, brand: provider.brand || '', mode: provider.mode || 'qr', stage: 'loading', qr: '', text: '' });
+    const model: QrMsg = { provider: provider.label, stage: 'loading', qr: '', text: '' };
+    if (tab.qrModel) { qrUpdate(tab, model); return; }
+    tab.qrModel = model;
+    chromeSend(record, 'jnd-chrome-qr', { action: 'open', id: tab.id, ...model });
     log('login-trace qr open slot=', tab.slot, 'provider=', provider.id);
   }
   function qrClose(record: WinRecord, tab: TabRecord, reason: string) {
+    tab.qrModel = null;
     chromeSend(record, 'jnd-chrome-qr', { action: 'close', id: tab.id });
     log('login-trace qr close slot=', tab.slot, 'reason=', reason);
   }
-  function qrStage(tab: TabRecord, state: any): 'loading' | 'scan' | 'confirm' | 'exchanging' | 'error' | 'yield' {
+  function qrStage(tab: TabRecord, state: any): 'loading' | 'scan' | 'confirm' | 'verify' | 'exchanging' | 'entering' | 'error' | 'yield' {
     const stage = String(state?.stage || '');
+    if (state?.error) return 'error'; /* 错误先于让位：滑块／核验阶段出错（超时、被关）也得把卡亮回来给玩家重试，否则卡藏着、页面也没了提示 */
     if (/captcha|identify/i.test(stage)) return 'yield';
-    if (state?.error) return 'error';
-    if (tab.loginMode === 'browser') {
-      if (!stage || stage === 'setup' || /_browser_login$/.test(stage)) return 'loading';
-      return 'exchanging';
-    }
+    if (stage === 'entry_config') return 'entering'; // 换票后进入落地页准备，以真实请求阶段切换最后一句提示
     if (stage === 'waiting_confirmation') return 'confirm';
+    if (state?.qr && /_poll$/.test(stage) && tab.loginSeen === 'confirm') return 'confirm'; // 请求中的轮询不撤销服务端已确认的扫码进度
     if (state?.qr) return 'scan';
-    /* 二维码收起且已经扫过＝在换票（登录器此时的 stage 因方式而异：wegame／channel／bili_poll／steam_poll…，不按名字猜，按「码没了」判） */
-    if (tab.loginSeen === 'scan' || tab.loginSeen === 'confirm' || tab.loginSeen === 'exchanging') return 'exchanging';
+    if (/check|validate|judge|verify_done|verify_prepare/i.test(stage)) return 'verify'; /* 官方验证件加载期间继续显示校验卡，就绪后才让位。 */
+    /* 二维码收起且已经扫过＝在换票；让位、校验之后同样算已扫过。 */
+    if (tab.loginSeen === 'entering') return 'entering';
+    if (['scan', 'confirm', 'exchanging', 'yield', 'verify'].includes(tab.loginSeen)) return 'exchanging';
     return 'loading';
   }
 
-  function providerPage(option: { page?: string }, nonce: string, state: string) {
-    const page = String(option.page || '')
-      .replace(/\{nonce\}/g, encodeURIComponent(nonce))
-      .replace(/\{state\}/g, encodeURIComponent(state));
-    const url = new URL(page);
-    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('渠道官方登录页必须使用 HTTPS');
-    return url.href;
+  function loginStateMatches(tab: TabRecord, state: any): boolean {
+    return Boolean(tab.loginProvider && state?.requestId === tab.loginRequest
+      && state.requestProvider === tab.loginProvider && (!state.provider || state.provider === tab.loginProvider));
   }
 
-  function closeAuthWindow(tab: TabRecord) {
-    const win = tab.loginWindow;
-    tab.loginWindow = null;
-    if (!win) return;
-    try { authWindowOwners.delete(win.webContents); } catch (_) {}
-    try { if (!win.isDestroyed()) win.close(); } catch (_) {}
+  // 第三方登录：由统一登录器（官方登录页注入）执行，壳只负责把它带到登录页、发起、呈现二维码。
+  // ===== 网页登录浮层 =====
+  // 官方登录页开在当前标签同一个账号容器（同一 session）的视图里，叠在 chrome 之上；完成信号：
+  // Steam 跳到三国杀回调页（地址 # 后带令牌）；OPPO 跳到 game-login.heytap.com 回调页（带一次性 code）；vivo 选定子账号后写下 vvf_subopenid／vvf_opentoken。
+  // 完成就收起浮层，把结果交给统一登录器接着换取（扫码卡回到「账号校验中」）。中途关掉只收浮层，扫码卡照旧。日志只记方式与原因，不记地址和值。
+  const WEB_TITLES: Record<string, string> = { steam: 'Steam 账号登录', oppo: 'OPPO 账号登录', vivo: 'vivo 账号登录', xiaomi: '小米账号登录', qq: 'QQ 账号登录', huawei: '华为账号登录', honor: '荣耀账号登录' };
+  const WEB_WIDTH: Record<string, number> = { huawei: 880, honor: 880 }; /* 华为、荣耀账号页是宽屏两栏，440 装不下（实测） */
+  const webUrlWaiters = new Map<number, { sender: any; done: (m: any) => void }>(); let webUrlSeq = 0;
+  function requestWebURL(tab: TabRecord, provider: string): Promise<{ url: string; error?: string }> {
+    return new Promise(resolve => {
+      const reqId = ++webUrlSeq; const timer = setTimeout(() => { webUrlWaiters.delete(reqId); resolve({ url: '', error: 'BRIDGE_TIMEOUT' }); }, 4000);
+      webUrlWaiters.set(reqId, { sender: tab.contents, done: m => { clearTimeout(timer); resolve({ url: String(m?.url || ''), error: String(m?.error || '') }); } });
+      try { tab.contents.send('jnd-login-web-url', { provider, reqId }); } catch (_) { clearTimeout(timer); webUrlWaiters.delete(reqId); resolve({ url: '', error: 'SEND_FAILED' }); }
+    });
   }
-
-  // 渠道官方登录窗口与游戏标签共用分区和 preload：官方回调页写入的 GM 结果才能落到同一个槽位。
-  function openAuthWindow(record: WinRecord, tab: TabRecord, option: any, nonce: string, state: string) {
-    closeAuthWindow(tab);
-    const windowName = `sgs-${option.provider}-${nonce}`;
-    const target = providerPage(option, nonce, state);
-    const win = new BrowserWindow({
-      width: 620,
-      height: 820,
-      minWidth: 420,
-      minHeight: 560,
-      parent: record.win && !record.win.isDestroyed() ? record.win : undefined,
-      title: `${option.brand || option.label} 官方登录`,
-      icon: path.join(__dirname, '..', channel.id, 'build', 'icon.ico'),
-      autoHideMenuBar: true,
-      show: false,
-      backgroundColor: '#ffffff',
-      webPreferences: {
-        preload: path.join(__dirname, '..', channel.id, 'preload.js'),
-        contextIsolation: false,
-        sandbox: false,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: true,
-        backgroundThrottling: false,
-        partition: `persist:jinnangdai-${channel.id}-${tab.slot}`,
-        additionalArguments: [`--jnd-auth-window-name=${windowName}`],
-      },
-    });
-    tab.loginWindow = win;
-    authWindowOwners.set(win.webContents, tab);
-    configureSession(win.webContents.session);
-    const reveal = () => { try { if (!win.isDestroyed() && !win.isVisible()) win.show(); } catch (_) {} };
-    win.once('ready-to-show', reveal);
-    setTimeout(reveal, 1200);
-    win.webContents.on('render-process-gone', (_event, details) => log('auth render-process-gone', JSON.stringify(details || {})));
-    win.webContents.setWindowOpenHandler(({ url }) => {
-      log('auth window-open', 'slot=', tab.slot, 'url=', url);
-      if (/^https?:/i.test(url)) setTimeout(() => { if (!win.isDestroyed()) win.loadURL(url).catch(error => log('auth open-loadURL-threw', error?.message || error)); }, 0);
-      return { action: 'deny' };
-    });
-    win.on('closed', () => {
-      try { authWindowOwners.delete(win.webContents); } catch (_) {}
-      const current = tab.loginWindow === win;
-      if (current) tab.loginWindow = null;
-      if (!current || record.closing || tab.loginProvider !== option.id) return;
-      setTimeout(() => {
-        if (record.closing || tab.loginAuthCompleted || tab.loginProvider !== option.id) return;
-        cancelProviderLogin(record, tab, 'auth-window-closed');
-      }, 300);
-    });
-    win.loadURL(target).catch(error => {
-      log('auth window load failed', target.split('?')[0], error?.message || error);
-      if (!win.isDestroyed()) showErrorPage(win.webContents, `无法打开渠道官方登录页：${error?.message || error}`);
-    });
-    return win;
+  function webCallback(provider: string, raw: string): Record<string, string> | null {
+    let u: URL; try { u = new URL(raw); } catch (_) { return null; }
+    if (provider === 'steam') return u.origin === 'https://10th-ly-login.sanguosha.com' && u.pathname === '/steam/oauth/callback.html' && /access_token=/.test(u.hash) ? { href: u.href } : null;
+    /* QQ：登录完跳中转页（imgcache…/proxy.htm）或 auth://tauth.qq.com/；华为：com.huawei.apps.<id>:/oauth2redirect；荣耀：hms://redirect_url。后两者是 App 回调，系统不会打开（外部唤起已拒），这里截下 */
+    if (provider === 'qq') return (u.origin === 'https://imgcache.qq.com' && u.pathname === '/open/connect/widget/mobile/login/proxy.htm') || (u.protocol === 'auth:' && u.host === 'tauth.qq.com') ? { href: u.href } : null;
+    if (provider === 'huawei') return u.protocol === 'com.huawei.apps.111830943:' && u.pathname === '/oauth2redirect' && /[?&]code=/.test(u.search) ? { href: u.href } : null;
+    if (provider === 'honor') return u.protocol === 'hms:' && u.host === 'redirect_url' && u.pathname === '' && /[?&]code=/.test(raw) ? { href: raw } : null;
+    /* 小米：跳 game.xiaomi.com 回调带 code（http） */
+    if (provider === 'xiaomi') return u.origin === 'http://game.xiaomi.com' && u.pathname === '/oauthcallback/mioauth' && u.searchParams.get('code') ? { href: u.href } : null;
+    if (provider === 'oppo') {
+      if (u.origin !== 'https://game-login.heytap.com' || !u.pathname.startsWith('/game-union-h5/h5/client-login/')) return null;
+      const params = new URLSearchParams(u.search); const hash = u.hash.replace(/^#/, ''); const q = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : hash;
+      try { for (const [k, v] of new URLSearchParams(q)) if (!params.has(k)) params.set(k, v); } catch (_) {}
+      const code = String(params.get('code') || '');
+      return /^[A-Za-z0-9+/=_.~-]{8,4096}$/.test(code) ? { code } : null;
+    }
+    return null;
   }
-
-  // 第三方登录：由统一登录器（官方登录页注入）执行。扫码方式显示二维码；
-  // 官方网页方式由壳另开渠道窗口，账号密码／短信／Steam Guard 只输入该官方页面。
-  function startProviderLogin(record: WinRecord, tab: TabRecord, optionId: string, opts: { logout?: boolean } = {}) {
-    const option = providerById(optionId);
-    if (!option || tab.contents.isDestroyed()) return;
-    if (tab.loginProvider === option.id) { log('login-trace provider re-pick ignored slot=', tab.slot, option.id); return; } /* 同一方式开着再点＝不重来 */
-    closeAuthWindow(tab);
-    const k = getContainer(tab.slot); if (!tab.loginPrev) tab.loginPrev = { entryId: k.entryId, provider: k.provider };
-    tab.loginProvider = option.id; tab.loginOptionId = option.id; tab.provider = option.id; tab.loginSeen = '';
-    tab.loginMode = option.mode === 'browser' ? 'browser' : 'qr';
-    tab.loginNonce = tab.loginMode === 'browser' ? crypto.randomBytes(16).toString('hex') : '';
-    tab.loginState = tab.loginMode === 'browser' && (option.provider === 'xiaomi' || option.provider === 'steam') ? tab.loginNonce : '';
-    tab.loginAuthCompleted = false;
-    /* 点选方式那一刻就写进档案：chip 立刻是该方式，取消再回到原来的入口 */
-    setContainer(tab.slot, { entryId: 'guanfu', provider: option.id, nick: '', uid: '', status: 'none' });
-    log('login-trace provider pick slot=', tab.slot, 'provider=', option.id, 'mode=', tab.loginMode, 'logout=', Boolean(opts.logout));
+  async function openWebSheet(record: WinRecord, tab: TabRecord) {
+    const provider = String(tab.loginProvider || '');
+    if (!WEB_TITLES[provider] || tab.webSheet || tab.contents.isDestroyed()) return;
+    const loginRequest = tab.loginRequest, openSeq = tab.webOpenSeq = (tab.webOpenSeq || 0) + 1;
+    const { url, error } = await requestWebURL(tab, provider);
+    if (tab.webOpenSeq !== openSeq || tab.owner !== record || record.closing || tab.loginProvider !== provider || tab.loginRequest !== loginRequest) return;
+    if (!url || !/^https:\/\//.test(url) || tab.webSheet || tab.contents.isDestroyed()) { log('login-trace web open failed slot=', tab.slot, provider, error || 'no-url'); return; }
+    const ses = tab.contents.session;
+    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    try { view.setBackgroundColor('#ffffff'); view.setBorderRadius?.(5); view.setVisible(false); } catch (_) {} /* 圆角同页面区边线（6）内一圈 */
+    const wc = view.webContents; let done = false;
+    let vivoBase = '', cookieTimer: ReturnType<typeof setTimeout> | null = null;
+    const vivoUrl = 'https://joint.vivo.com.cn/game-subaccount-login/';
+    const readVivo = async () => {
+      const list = await ses.cookies.get({ url: vivoUrl }).catch(() => []);
+      const get = (n: string) => String(list.find(c => c.name === n)?.value || '');
+      return { subOpenId: get('vvf_subopenid'), openToken: get('vvf_opentoken') };
+    };
+    const onCookie = (_e, cookie, _cause, removed) => {
+      if (removed || done || !/^(vvf_subopenid|vvf_opentoken)$/.test(cookie?.name || '') || !/(^|\.)vivo\.com\.cn$/.test(String(cookie?.domain || '').replace(/^\./, ''))) return;
+      if (cookieTimer) clearTimeout(cookieTimer);
+      cookieTimer = setTimeout(async () => {
+        const v = await readVivo();
+        if (!done && v.subOpenId && v.openToken && `${v.subOpenId}\n${v.openToken}` !== vivoBase) finish(v);
+      }, 800);
+    };
+    const close = (reason: string) => {
+      if (tab.webSheet !== sheet) return;
+      tab.webSheet = null; done = true; if (cookieTimer) clearTimeout(cookieTimer);
+      try { ses.cookies.removeListener('changed', onCookie); } catch (_) {}
+      try { record.win.contentView.removeChildView(view); } catch (_) {}
+      if (!wc.isDestroyed()) wc.close({ waitForBeforeUnload: false });
+      chromeSend(record, 'jnd-chrome-websheet', { action: 'close', id: tab.id });
+      log('login-trace web close slot=', tab.slot, provider, 'reason=', reason);
+      if (reason !== 'done') restoreWindowFocus(tab.owner);
+    };
+    const finish = (payload: Record<string, string>) => {
+      if (done) return; done = true;
+      close('done');
+      if (tab.contents.isDestroyed() || tab.loginProvider !== provider || tab.loginRequest !== loginRequest || tab.owner !== record) return;
+      const requestId = ++tab.loginRequest; tab.loginStartedFor = requestId; tab.loginSeen = 'exchanging'; tab.loginRetries = 0;
+      log('login-trace web finish slot=', tab.slot, provider);
+      qrUpdate(tab, { provider: providerById(provider)?.label || '', stage: 'exchanging', qr: '', text: '' });
+      tab.contents.send('jnd-login-web-finish', { provider, requestId, web: payload });
+    };
+    const sheet: WebSheet = { view, provider, close };
+    tab.webSheet = sheet;
+    if (provider === 'vivo') { const v = await readVivo(); vivoBase = `${v.subOpenId}\n${v.openToken}`; ses.cookies.on('changed', onCookie); }
+    const watch = (event, raw: string) => { const result = webCallback(provider, String(raw || '')); if (result) { try { event?.preventDefault?.(); } catch (_) {} finish(result); } };
+    wc.on('will-redirect', (e, u) => watch(e, u)); wc.on('will-navigate', (e, u) => watch(e, u));
+    wc.on('did-start-navigation', (e, u, _inPage, isMain) => { if (isMain) watch(null, u); });
+    wc.on('did-navigate-in-page', (_e, u, isMain) => { if (isMain) watch(null, u); });
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.on('dom-ready', () => { wc.insertCSS('::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}').catch(() => {}); }); /* 同落地页：藏滚动条、照常能滚 */
+    wc.on('before-input-event', (event, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); close('esc'); } });
+    wc.on('did-fail-load', (_e, code, desc, failedUrl, isMain) => {
+      if (isMain && !done) { const result = webCallback(provider, String(failedUrl || '')); if (result) { finish(result); return; } } /* App 回调地址打不开＝走到头了 */
+      if (!isMain || code === -3 || done) return;
+      log('login-trace web load failed slot=', tab.slot, provider, 'code=', code);
+      showErrorPage(wc, `${WEB_TITLES[provider].replace(' 账号登录', '')} 官方登录页没能打开（${desc || code}）`, { code: desc, errno: code });
+    });
+    chromeSend(record, 'jnd-chrome-websheet', { action: 'open', id: tab.id, title: WEB_TITLES[provider], provider: providerById(provider)?.label || '', width: WEB_WIDTH[provider] || 440 });
+    log('login-trace web open slot=', tab.slot, provider);
+    wc.loadURL(url).catch(() => {});
+  }
+  function startProviderLogin(record: WinRecord, tab: TabRecord, providerId: string, opts: { logout?: boolean; reload?: boolean } = {}) {
+    const provider = providerById(providerId);
+    if (!provider || tab.contents.isDestroyed()) return;
+    if (tab.loginProvider === provider.id) { log('login-trace provider re-pick ignored slot=', tab.slot, provider.id); return; } /* 同一方式开着再点＝不重来 */
+    const requestId = ++tab.loginRequest;
+    tab.loginProvider = provider.id; tab.loginSeen = ''; tab.loginRetries = 0;
+    /* 点选方式那一刻就写进档案：chip 立刻是该方式 */
+    setContainer(tab.slot, { entryId: 'guanfu', provider: provider.id, nick: '', uid: '', status: 'none' });
+    log('login-trace provider pick slot=', tab.slot, 'provider=', provider.id, 'logout=', Boolean(opts.logout), opts.reload ? 'reload' : '');
+    /* 点选即出卡（审计 E6：原来等登录桥就绪才出卡，桥一直不来就只剩 chip 变了、没卡也没错）。30 秒还没发起就报错，桥晚到仍会接着发起 */
+    qrOpen(record, tab, provider);
+    setTimeout(() => {
+      if (tab.contents.isDestroyed() || tab.loginRequest !== requestId || tab.loginProvider !== provider.id || tab.loginStartedFor === requestId) return;
+      tab.loginSeen = 'error'; log('login-trace bridge timeout slot=', tab.slot, 'provider=', provider.id);
+      qrUpdate(tab, { provider: provider.label, stage: 'error', qr: '', text: '', code: 'LOGIN_BRIDGE_UNAVAILABLE' });
+    }, 30000);
     const contents = tab.contents;
     const onLoginPage = () => {
       try {
@@ -729,35 +985,46 @@ export = function startMicroClient(config) {
       } catch (_) { return false; }
     };
     const begin = () => {
-      if (contents.isDestroyed() || tab.loginProvider !== option.id) return;
-      qrOpen(record, tab, option);
-      if (tab.loginMode === 'browser') {
-        try { openAuthWindow(record, tab, option, tab.loginNonce, tab.loginState); }
-        catch (error) {
-          log('auth window create failed', error?.message || error);
-          chromeSend(record, 'jnd-chrome-qr', { action: 'update', id: tab.id, provider: option.label, brand: option.brand || '', mode: 'browser', stage: 'error', qr: '', text: `无法打开官方登录窗口：${error?.message || error}` });
-          return;
-        }
-      }
-      contents.send('jnd-login-start', { provider: option.provider, mode: tab.loginMode, nonce: tab.loginNonce, state: tab.loginState });
+      if (tab.loginStartedFor === requestId || !tab.loginBridgeReady || contents.isDestroyed() || tab.loginProvider !== provider.id || tab.loginRequest !== requestId) return;
+      tab.loginStartedFor = requestId;
+      contents.send('jnd-login-start', { provider: provider.id, requestId });
     };
+    tab.loginBegin = begin;
     const official = entryById('guanfu');
     if (tab.entryId !== official.id) { tab.entryId = official.id; setTitle(record); }
-    if (opts.logout) { logoutSlot(tab).then(() => { contents.once('did-finish-load', () => setTimeout(begin, 300)); contents.loadURL(entryUrl(official)).catch(error => showErrorPage(contents, `无法加载入口：${error?.message || error}`)); }); return; }
-    if (onLoginPage()) { begin(); return; }
-    contents.once('did-finish-load', () => setTimeout(begin, 300));
-    contents.loadURL(entryUrl(official)).catch(error => showErrorPage(contents, `无法加载入口：${error?.message || error}`));
+    const navigate = () => {
+      if (contents.isDestroyed() || tab.loginRequest !== requestId) return;
+      // A newly created provider tab may still be navigating when another
+      // provider is selected. Reuse that navigation; only the latest request starts.
+      if (!tab.loginNavigation) {
+        const pending = loadEntry(contents, entryUrl(official));
+        tab.loginNavigation = pending;
+        void pending.finally(() => { if (tab.loginNavigation === pending) tab.loginNavigation = null; }).catch(() => {});
+      }
+      tab.loginNavigation.then(begin, error => {
+        if (!contents.isDestroyed() && tab.loginRequest === requestId) showErrorPage(contents, `无法加载入口：${error?.message || error}`, error);
+      });
+    };
+    if (opts.logout) {
+      void (tab.loginNavigation || Promise.resolve()).catch(() => {}).then(async () => {
+        if (contents.isDestroyed() || tab.loginRequest !== requestId) return;
+        await logoutSlot(tab); navigate();
+      });
+      return;
+    }
+    if (!opts.reload && onLoginPage() && tab.loginBridgeReady) { begin(); return; }
+    if (tab.loginNavigation) { navigate(); return; }
+    if (!opts.reload && onLoginPage()) return; // The preload will announce bridge readiness.
+    navigate();
   }
-  /* 取消扫码：收卡、让登录器停、档案回到点选前 */
+  /* 取消扫码：收卡、让登录器停、标签回到「官服」——卡销毁后这一页就是官服登录页，标签必须如实写官服（作者 10-21；
+     推翻 61cba509b「取消保留所选方式」：那样标签写着 OPPO／小米，人却在官服页上） */
   function cancelProviderLogin(record: WinRecord, tab: TabRecord, reason: string) {
     if (!tab.loginProvider) return;
-    tab.loginProvider = null; closeAuthWindow(tab); qrClose(record, tab, reason);
+    const picked = tab.loginProvider; tab.loginProvider = null; qrClose(record, tab, reason);
     if (!tab.contents.isDestroyed()) tab.contents.send('jnd-login-cancel');
-    tab.loginMode = ''; tab.loginOptionId = ''; tab.loginNonce = ''; tab.loginState = ''; tab.loginAuthCompleted = false;
-    const prev = tab.loginPrev; tab.loginPrev = null;
-    tab.provider = prev?.provider || '';
-    if (prev) setContainer(tab.slot, { entryId: prev.entryId, provider: prev.provider, status: 'none', nick: '', uid: '' });
-    log('login-trace cancel slot=', tab.slot, 'reason=', reason, 'restore=', JSON.stringify(prev));
+    setContainer(tab.slot, { entryId: 'guanfu', provider: '', status: 'none', nick: '', uid: '' });
+    log('login-trace cancel slot=', tab.slot, 'reason=', reason, 'was=', picked, 'now= guanfu');
   }
 
   // 账号簿（Chrome 规则）：点「登录游戏」那一刻就在右上角弹卡片；账号密码在卡里可改；只问与已存不同的。
@@ -818,6 +1085,31 @@ export = function startMicroClient(config) {
   const pushPlugins = () => broadcast('jnd-chrome-data', 'plugins', pluginRows());
 
   // ===== 窗口 =====
+  // Electron 33 Windows: setParentWindow(null) clears the native HWND owner;
+  // setSkipTaskbar(false) calls ITaskbarList::AddTab for this HWND. Keep the shared
+  // AppUserModelID (taskbar grouping), but register every detached top-level window.
+  function registerTaskWindow(record: WinRecord) {
+    const { win } = record;
+    if (process.platform !== 'win32' || record.closing || win.isDestroyed()) return;
+    try {
+      win.setParentWindow(null);
+      win.setSkipTaskbar(false);
+      log('window-shell registration requested id=', win.id, 'visible=', win.isVisible(), 'focusable=', win.isFocusable());
+    } catch (error) { log('window-shell registration failed id=', win.id, 'code=', error?.code || 'WINDOW_REGISTRATION_FAILED'); }
+  }
+  // WebContents.focus() can activate its native window on Windows. Delayed view
+  // updates may change the keyboard target only while that window is foreground.
+  function focusContents(record: WinRecord, contents: any) {
+    if (record.closing || record.win.isDestroyed() || !record.win.isVisible() || !record.win.isFocused()
+      || !contents || contents.isDestroyed()) return;
+    try { if (!contents.isFocused()) contents.focus(); } catch (_) {}
+  }
+  function restoreWindowFocus(record: WinRecord) {
+    const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
+    const contents = record.chromeKeys || record.curKind !== 'game'
+      ? record.chromeContents : tab?.webSheet?.view.webContents || tab?.contents;
+    focusContents(record, contents);
+  }
   function createWindow(options: { adopt?: TabRecord; pageKind?: string; bounds?: { x: number; y: number; width: number; height: number } } = {}) {
     const iconPath = path.join(__dirname, '..', channel.id, 'build', 'icon.ico');
     const iconPng = path.join(__dirname, 'icon-256.png');
@@ -839,8 +1131,11 @@ export = function startMicroClient(config) {
       minHeight: 600 + TITLE_HEIGHT,
       title: '锦囊妙计 · 一将成名',
       icon: iconPath,
-      frame: false, // 标题栏连同右上三键都由 chrome 视图自绘
+      /* Windows：标题栏连同右上三键都由 chrome 视图自绘。macOS（作者 10-21）：保留系统红绿灯，标题栏其余部分仍自绘 */
+      ...(IS_MAC ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { ...MAC_LIGHTS } } : { frame: false }),
       autoHideMenuBar: true,
+      focusable: true,
+      skipTaskbar: false,
       show: true,
       backgroundColor: BAR_COLOR,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -853,13 +1148,15 @@ export = function startMicroClient(config) {
     const overlays = createOverlays({ WebContentsView, ipcMain, win, titleHeight: TITLE_HEIGHT, log });
     const record: WinRecord = { win, chrome, chromeContents: chrome.webContents, tabs: new Map(), order: [], cur: null, curKind: 'game', overlays, covered: false, closing: false, ready: false, pendingAdopt: options.adopt || null, pageKind: options.pageKind || null, follow: null, active: null };
     windows.set(win, record);
+    registerTaskWindow(record);
+    win.on('show', () => registerTaskWindow(record));
     win.contentView.addChildView(chrome);
     chrome.webContents.on('will-navigate', event => event.preventDefault());
     chrome.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     chrome.webContents.on('render-process-gone', (_event, details) => { log('chrome render-process-gone', JSON.stringify(details || {})); });
     chrome.webContents.on('console-message', (_event, level, message) => { if (level >= 2) log('CHROME-CONSOLE level=', level, String(message).slice(0, 600)); });
     chrome.webContents.on('before-input-event', (event, input) => { if (handleMacEditShortcut(chrome.webContents, input, win)) event.preventDefault(); });
-    chrome.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(chromeDocument('锦囊妙计 · 一将成名', iconPng))}`)
+    chrome.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(chromeDocument('锦囊妙计 · 一将成名', iconPng, process.platform))}`)
       .catch(error => { log('chrome load failed', error?.message || error); });
     win.webContents.on('will-navigate', event => event.preventDefault());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -876,11 +1173,23 @@ export = function startMicroClient(config) {
     relayout();
     // 叠层视图预热：首次扫码／保存密码不再等渲染进程启动。
     /* 扫码卡已改由 chrome 引擎画；popup-window 的 qr 叠层停用不删 */
-    const windowState = () => chromeSend(record, 'jnd-chrome-window-state', { maximized: win.isMaximized(), focused: win.isFocused() });
-    win.on('focus', windowState); win.on('blur', windowState);
+    const windowState = () => chromeSend(record, 'jnd-chrome-window-state', { maximized: win.isMaximized(), focused: win.isFocused(), fullscreen: win.isFullScreen() });
+    win.on('focus', () => { windowState(); restoreWindowFocus(record); }); win.on('blur', windowState);
     const memTimer = setInterval(() => { for (const [, tab] of record.tabs) pushTabState(record, tab); }, 15000);
     win.once('closed', () => clearInterval(memTimer));
     win.on('maximize', () => { windowState(); relayout(); }); win.on('unmaximize', () => { windowState(); relayout(); });
+    /* 全屏（macOS 绿灯／Ctrl+Cmd+F，Windows F11）：外框撤掉、游戏区铺满；chrome 跟着换样式（macOS 收起红绿灯让位，Windows 最大化键变「退出全屏」） */
+    win.on('enter-full-screen', () => {
+      windowState(); relayout();
+      /* 进全屏后键盘焦点可能落在外框文档上（Mac 点绿灯）：留痕，并在没有弹层时交给当前游戏画面 */
+      const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
+      log('fullscreen enter focus=', win.webContents.isFocused() ? 'frame' : record.chromeContents.isFocused() ? 'chrome' : tab && !tab.contents.isDestroyed() && tab.contents.isFocused() ? 'game' : 'none', 'covered=', record.covered);
+      if (!record.covered && tab && record.curKind === 'game') restoreWindowFocus(record);
+    });
+    win.on('leave-full-screen', () => { log('fullscreen leave'); windowState(); relayout(); });
+    /* 全屏时 Esc 退出：键落在哪个 webContents 都接住（作者 10-21：只挂在游戏画面上，Mac 实机按 Esc 无响应）；chrome 盖着时 Esc 归对话框／菜单／扫码卡 */
+    win.webContents.on('before-input-event', (event, input) => { if (isFullscreenEsc(win, input)) { event.preventDefault(); log('fullscreen esc from=frame'); win.setFullScreen(false); } });
+    chrome.webContents.on('before-input-event', (event, input) => { if (!record.covered && isFullscreenEsc(win, input)) { event.preventDefault(); log('fullscreen esc from=chrome'); win.setFullScreen(false); } });
     if (process.env.JND_DEVTOOLS === '1') chrome.webContents.openDevTools({ mode: 'detach' });
     win.on('close', event => {
       if (win.isDestroyed()) return;
@@ -891,6 +1200,7 @@ export = function startMicroClient(config) {
         chromeSend(record, 'jnd-chrome-close-request');
         return;
       }
+      if (process.platform === 'win32') try { win.setSkipTaskbar(true); } catch (_) {}
       try { if (win.isVisible()) win.hide(); } catch (_) {} /* 系统关闭（红点／Cmd+W／退出）同样先藏起来 */
       if (record.merged || (record.tabs.size === 0 && record.pageKind)) return; // 标签并到别的窗口去了／只有内页的窗口：不改记忆
       // 记住标签（恢复上次打开的账号）与窗口尺寸
@@ -919,14 +1229,12 @@ export = function startMicroClient(config) {
     for (const [, record] of windows) {
       for (const [, tab] of record.tabs) {
         if (tab.contents.isDestroyed()) continue;
-        closeAuthWindow(tab);
         try { await tab.contents.session.clearStorageData(); } catch (error) { log('logout clearStorageData failed', error?.message || error); }
         for (const key of [...gmStores.keys()]) if (key.startsWith(`slot-${tab.slot}/`)) { gmStores.delete(key); clearTimeout(gmFlushTimers.get(key)); }
         try { fs.rmSync(path.join(gmStoreDirectory(), `slot-${tab.slot}`), { recursive: true, force: true }); } catch (_) {}
-        tab.pendingCredential = null; if (tab.loginProvider) { tab.loginProvider = null; tab.loginPrev = null; qrClose(record, tab, 'logout-all'); }
-        tab.loginMode = ''; tab.loginOptionId = ''; tab.loginNonce = ''; tab.loginState = ''; tab.loginAuthCompleted = false;
+        tab.pendingCredential = null; if (tab.loginProvider) { tab.loginProvider = null; qrClose(record, tab, 'logout-all'); }
         const entry = entryById(tab.entryId) || ENTRIES[0];
-        tab.contents.loadURL(entryUrl(entry)).catch(error => log('logout reload failed', error?.message || error));
+        loadEntry(tab.contents, entryUrl(entry)).catch(error => log('logout reload failed', error?.message || error));
       }
     }
     for (const c of closedList()) wipeSlot(c.slot); writeSettings({ closedTabs: [] }); pushClosed();
@@ -936,22 +1244,6 @@ export = function startMicroClient(config) {
   // GM 存储：按「标签槽位／组件」分文件——统一登录器把 WeGame 会话存在 GM 里，不按槽位分开，新标签就会把上一个账号的登录态带过去。
   const gmStoreDirectory = () => path.join(app.getPath('userData'), 'gm-store');
   const gmKey = (sender, componentId: string) => `slot-${tabOf(sender)?.tab.slot || 0}/${componentId}`;
-  const LOGIN_RESULT_PREFIX = /^sgs-(?:vivo|oppo|steam|xiaomi)-page-result-v1:/;
-  const isLoginResultKey = (tab: TabRecord, key: string) => Boolean(tab.loginNonce) && key.startsWith('sgs-') && LOGIN_RESULT_PREFIX.test(key) && key.endsWith(tab.loginNonce);
-  function gmBroadcast(key: string, componentId: string, name: string, value: any, deleted: boolean) {
-    const deliver = contents => {
-      if (!contents || contents.isDestroyed()) return;
-      try { contents.send('jnd-gm-store-changed', componentId, name, value, deleted); } catch (_) {}
-    };
-    for (const [, record] of windows) for (const [, tab] of record.tabs) {
-      if (`slot-${tab.slot}/${componentId}` === key) deliver(tab.contents);
-    }
-    for (const [, tab] of authWindowOwners) {
-      if (`slot-${tab.slot}/${componentId}` === key) {
-        try { deliver(tab.loginWindow?.webContents); } catch (_) {}
-      }
-    }
-  }
   const gmStores = new Map();
   const gmFlushTimers = new Map();
   function gmStore(componentId) {
@@ -963,7 +1255,13 @@ export = function startMicroClient(config) {
   }
   function gmFlush(componentId) {
     clearTimeout(gmFlushTimers.get(componentId));
-    gmFlushTimers.set(componentId, setTimeout(() => {
+    gmFlushTimers.set(componentId, setTimeout(() => gmWrite(componentId), 300));
+  }
+  /* 退出时把还在 300ms 合并窗口里的 GM 写入立刻落盘（作者 10-21「最近登录恢复不靠谱」：原来只补写了容器档案，
+     刚登上就退出时档案记着已登录、第三方会话却没写进 GM 文件，恢复后落回未登录） */
+  function gmFlushAll() { for (const componentId of [...gmFlushTimers.keys()]) { clearTimeout(gmFlushTimers.get(componentId)); gmWrite(componentId); } }
+  function gmWrite(componentId) {
+    {
       gmFlushTimers.delete(componentId);
       const file = path.join(gmStoreDirectory(), `${componentId}.json`);
       const temporary = `${file}.${process.pid}.tmp`;
@@ -975,7 +1273,7 @@ export = function startMicroClient(config) {
         log('gm store flush failed', componentId, error?.message || error);
         try { fs.unlinkSync(temporary); } catch (_) {}
       }
-    }, 300));
+    }
   }
   // GM 权限：随包组件表里标了 gm 的，或插件库里 @grant 了 GM 函数的
   const gmAllowed = id => Boolean(COMPONENTS.find(component => component.id === id && component.gm)) || Boolean(pluginStore?.get(id)?.grant);
@@ -1032,20 +1330,14 @@ export = function startMicroClient(config) {
     ipcMain.on('jnd-gm-store-set', (event, componentId, key, value) => {
       const id = String(componentId);
       if (!gmAllowed(id) || typeof key !== 'string') return;
-      const storeKey = gmKey(event.sender, id);
-      gmStore(storeKey)[key] = value;
-      gmFlush(storeKey);
-      gmBroadcast(storeKey, id, key, value, false);
-      const found = tabOf(event.sender);
-      if (found && id === 'unified-login' && isLoginResultKey(found.tab, key)) found.tab.loginAuthCompleted = true;
+      gmStore(gmKey(event.sender, id))[key] = value;
+      gmFlush(gmKey(event.sender, id));
     });
     ipcMain.on('jnd-gm-store-delete', (event, componentId, key) => {
       const id = String(componentId);
       if (!gmAllowed(id) || typeof key !== 'string') return;
-      const storeKey = gmKey(event.sender, id);
-      delete gmStore(storeKey)[key];
-      gmFlush(storeKey);
-      gmBroadcast(storeKey, id, key, undefined, true);
+      delete gmStore(gmKey(event.sender, id))[key];
+      gmFlush(gmKey(event.sender, id));
     });
     ipcMain.handle('jnd-gm-xhr', async (event, componentId, requestId, request) => {
       const id = String(componentId);
@@ -1076,18 +1368,24 @@ export = function startMicroClient(config) {
         tabs: record?.pageKind ? [{ kind: record.pageKind, adopt: true }] : record?.pendingAdopt ? [{ entry: chipLabel(getContainer(record.pendingAdopt.slot)), provider: providerLabel(getContainer(record.pendingAdopt.slot)), slot: record.pendingAdopt.slot, adopt: true, nick: getContainer(record.pendingAdopt.slot).nick, muted: record.pendingAdopt.muted }]
           : Array.isArray(session?.tabs) && session.tabs.length ? session.tabs.map(t => { const k = t.slot && containers[t.slot] ? containers[t.slot] : null; return k ? { entry: chipLabel(k), provider: providerLabel(k), slot: Number(t.slot), nick: k.nick, status: k.status } : { entry: entryByLabel(t.entry) ? t.entry : ENTRIES[0].label, slot: Number(t.slot) || undefined, provider: null }; }) : [],
         cur: Number(session?.cur) || 0, defaultEntry: entryById(defaultEntryId())?.label || ENTRIES[0].label,
-        width, height, maximized: record ? record.win.isMaximized() : false, focused: record ? record.win.isFocused() : true,
+        width, height, maximized: record ? record.win.isMaximized() : false, focused: record ? record.win.isFocused() : true, fullscreen: record ? record.win.isFullScreen() : false,
         feedback: Boolean(channel.feedbackUrl), closed: closedRows(),
       };
     });
     ipcMain.on('jnd-chrome-ready', event => { const record = windowOfChrome(event.sender); if (record) { record.ready = true; layoutWindow(record); } });
-    ipcMain.on('jnd-chrome-cover', (event, full) => {
-      log('chrome-cover', full ? 'full' : 'bar'); /* 盖满时 chrome 吞掉对游戏页的所有点击，必须留痕 */
+    ipcMain.on('jnd-chrome-cover', (event, full, keys) => {
       const record = windowOfChrome(event.sender); if (!record) return;
-      record.covered = Boolean(full); layoutWindow(record);
-      // 盖满时焦点给 chrome（对话框要接键盘）；缩回条时焦点还给当前游戏视图（否则关掉菜单后游戏收不到键盘）
+      const covered = Boolean(full), chromeKeys = covered && keys !== false;
+      log('chrome-cover', covered ? 'full' : 'bar', chromeKeys ? 'keys=chrome' : 'keys=game'); /* 盖满时 chrome 吞掉对游戏页的所有点击，必须留痕 */
+      if (record.covered !== covered) { record.covered = covered; layoutWindow(record); }
+      // 键盘归属只在变化时切（focus() 一次 8–10ms）：对话框、菜单、扫码卡、内页要键盘给 chrome；提示、通知、收起动画只盖不抢，焦点留在当前游戏视图
+      // 只盖不抢期间点了遮罩，焦点会自己落到 chrome：缩回条时照样还给游戏
+      const wasKeys = Boolean(record.chromeKeys); record.chromeKeys = chromeKeys;
       const tab = record.cur !== null ? record.tabs.get(record.cur) : null;
-      try { if (record.covered) record.chromeContents.focus(); else if (tab && record.curKind === 'game' && !tab.contents.isDestroyed()) tab.contents.focus(); } catch (_) {}
+      try {
+        if (chromeKeys && !wasKeys) restoreWindowFocus(record);
+        else if (!chromeKeys && (wasKeys || (!covered && record.chromeContents.isFocused())) && tab && record.curKind === 'game') restoreWindowFocus(record);
+      } catch (_) {}
     });
     ipcMain.on('jnd-chrome-save-result', (_event, r) => {
       if (!r || !r.save || !r.account || !entryById(String(r.entryId))) return;
@@ -1113,7 +1411,7 @@ export = function startMicroClient(config) {
         else if (msg.type === 'nav') { const c = tab.contents; if (msg.action === 'back') c.navigationHistory.goBack(); else if (msg.action === 'fwd') c.navigationHistory.goForward(); else if (msg.action === 'reload') c.reload(); else if (msg.action === 'stop') c.stop(); }
         else if (msg.type === 'mute') { tab.muted = Boolean(msg.muted); tab.contents.setAudioMuted(tab.muted); pushTabState(record, tab); }
         else if (msg.type === 'entry') { const entry = entryByLabel(String(msg.entry)); if (entry) switchEntry(record, tab, entry.id, { logout: Boolean(msg.logout) }); }
-        else if (msg.type === 'provider') { const provider = providerByLabel(String(msg.provider)); if (provider) startProviderLogin(record, tab, provider.id, { logout: Boolean(msg.logout) }); }
+        else if (msg.type === 'provider') { const provider = PROVIDERS.find(p => p.label === String(msg.provider)); if (provider) startProviderLogin(record, tab, provider.id, { logout: Boolean(msg.logout) }); }
       } catch (error) { log('chrome tab action failed', msg.type, error?.message || error); }
     });
     ipcMain.on('jnd-chrome-window', (event, cmd, reason) => {
@@ -1126,7 +1424,9 @@ export = function startMicroClient(config) {
         return;
       }
       if (cmd === 'minimize') win.minimize();
-      else if (cmd === 'maximize') { if (win.isMaximized()) win.unmaximize(); else win.maximize(); }
+      else if (cmd === 'maximize') { if (win.isFullScreen()) win.setFullScreen(false); else if (win.isMaximized()) win.unmaximize(); else win.maximize(); } /* 全屏时这个键是「退出全屏」 */
+      else if (cmd === 'fullscreen') win.setFullScreen(!win.isFullScreen());
+      else if (cmd === 'recorder') openLoginRecorder();
       else if (cmd === 'close') { record.closing = true; log('win.close: chrome asked (tabs=', record.tabs.size, ') reason=', String(reason || '')); try { win.hide(); } catch (_) {} win.close(); } /* 先隐藏再关：关窗时子视图逐个拆掉会露出外框底色，用户看到的是一闪 */
     });
     ipcMain.on('jnd-chrome-closed', (_event, msg) => { if (msg?.type === 'forget') forgetClosed(Number(msg.slot)); });
@@ -1211,10 +1511,13 @@ export = function startMicroClient(config) {
       tail = tail.replace(/(account|password|pwd|token)[^\s,}]*/gi, '$1=***');
       const body = Buffer.from(JSON.stringify({ note: String(note || '').slice(0, 2000), shell: displayVersion(channel.shellVersion), log: tail }), 'utf8');
       const response: Buffer = await new Promise((resolve, reject) => {
-        const request = https.request(channel.feedbackUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': body.length }, timeout: 20000 }, res => {
-          const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => { const buf = Buffer.concat(chunks); if (res.statusCode === 200) resolve(buf); else reject(new Error(`HTTP ${res.statusCode}`)); });
+        /* 反馈上传也走 Chromium 网络层 */
+        const request = net.request({ url: channel.feedbackUrl, method: 'POST', useSessionCookies: false }); request.setHeader('Content-Type', 'application/json');
+        const timer = setTimeout(() => { request.abort(); reject(new Error('连接超时')); }, 20000);
+        request.on('response', res => {
+          const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => { clearTimeout(timer); const buf = Buffer.concat(chunks); if (res.statusCode === 200) resolve(buf); else reject(new Error(`HTTP ${res.statusCode}`)); });
         });
-        request.on('timeout', () => request.destroy(new Error('连接超时'))); request.on('error', reject); request.end(body);
+        request.on('error', error => { clearTimeout(timer); reject(error); }); request.end(body);
       });
       const parsed = JSON.parse(response.toString('utf8'));
       if (!parsed?.id) throw new Error('服务器没有返回编号');
@@ -1225,70 +1528,101 @@ export = function startMicroClient(config) {
     ipcMain.on('jnd-landing-state', (event, state) => {
       const found = tabOf(event.sender); if (!found) return;
       const slot = found.tab.slot;
+      // 活跃扫码以带请求编号的 ready 为准，旧落地页 DOM 不能结束新任务。
+      if (state?.loggedIn && found.tab.loginProvider) return;
       if (state?.loggedIn) {
         const patch: Partial<Container> = { status: 'landing', entryId: found.tab.entryId };
         if (state.nickname) patch.nick = String(state.nickname);
-        const loginProvider = found.tab.loginOptionId || found.tab.provider || String(state.provider || '');
-        if (loginProvider) patch.provider = loginProvider; // 这次确实用某个第三方方式登上来了才写；页面本来就是登录态时方式不变
-        if (loginProvider) found.tab.provider = loginProvider;
-        setContainer(slot, patch);
+        setContainer(slot, patch); commitLogin(found.tab, 'landing');
         log('login-trace landing slot=', slot, 'loggedIn=', true, 'nick=', state.nickname ? 'yes' : 'no', 'provider=', state.provider || '');
-        if (found.tab.loginProvider) {
-          found.tab.loginProvider = null; found.tab.loginPrev = null; closeAuthWindow(found.tab); qrClose(found.record, found.tab, 'landing');
-          found.tab.loginMode = ''; found.tab.loginOptionId = ''; found.tab.loginNonce = ''; found.tab.loginState = ''; found.tab.loginAuthCompleted = false;
-        }
       } else { setContainer(slot, { status: 'none', nick: '', uid: '' }); log('login-trace landing slot=', slot, 'loggedIn=', false); }
     });
-    ipcMain.on('jnd-direct-login-event', (event, state) => {
+    ipcMain.on('jnd-login-bridge-ready', event => {
       const found = tabOf(event.sender); if (!found) return;
-      const type = String(state?.type || '');
-      if (!['ready', 'navigate', 'game-auth', 'error', 'cancel'].includes(type)) return;
-      const provider = String(state?.provider || '').slice(0, 32);
-      log('login-trace direct slot=', found.tab.slot, 'type=', type, 'provider=', provider,
-        'profile=', state?.profileId ? 'yes' : 'no',
-        type === 'game-auth' ? `success=${state?.success !== false}` : '',
-        type === 'error' || type === 'game-auth' ? `code=${String(state?.code || '').slice(0, 64)}` : '');
-      if (type === 'game-auth' && state?.success === false) {
-        log('login-error slot=', found.tab.slot, 'provider=', provider, 'stage=game_auth',
-          JSON.stringify({code: String(state?.code || 'GAME_HANDOFF_FAILED').slice(0, 64)}));
+      const tab = found.tab; tab.loginBridgeReady = true;
+      /* 已经发起过、页面又报就绪＝登录页被刷新或跳转过：旧尝试随旧文档没了，卡不能停在死码上。
+         用新编号重发——拿到过票据的会从存档直接续上，没拿到的重新出码（审计 C9） */
+      if (tab.loginProvider && tab.loginStartedFor === tab.loginRequest) {
+        const requestId = ++tab.loginRequest; tab.loginStartedFor = requestId; tab.loginSeen = 'loading'; tab.loginRetries = 0;
+        qrUpdate(tab, { provider: providerById(tab.loginProvider)?.label || '', stage: 'loading', qr: '', text: '' });
+        log('login-trace restart after page reload slot=', tab.slot, 'provider=', tab.loginProvider);
+        tab.contents.send('jnd-login-start', { provider: tab.loginProvider, requestId });
+        return;
       }
+      tab.loginBegin?.();
     });
     // 统一登录器投影（登录页 preload → 扫码窗）
     ipcMain.on('jnd-login-state', (event, state) => {
       const found = tabOf(event.sender);
+      if (!found || !loginStateMatches(found.tab, state)) return;
       if (state?.error) log('login-error slot=', found?.tab.slot, 'provider=', state.provider, 'stage=', state.stage, JSON.stringify(state.error)); // 扫码失败写日志
-      if (!found || !found.tab.loginProvider) return;
       const { record, tab } = found;
       if (String(state?.stage || '') === 'ready') {
         /* 换票完成：收卡，登录框里现在是登录器自己的面板（昵称／退出登录／进入游戏），玩家自己点 */
-        const loginProvider = tab.loginOptionId || tab.loginProvider || String(state.provider || tab.provider || '');
-        tab.loginProvider = null; tab.loginPrev = null; tab.provider = loginProvider; closeAuthWindow(tab); qrClose(record, tab, 'ready');
-        setContainer(tab.slot, { provider: loginProvider, status: 'landing' });
-        tab.loginMode = ''; tab.loginOptionId = ''; tab.loginNonce = ''; tab.loginState = ''; tab.loginAuthCompleted = false;
+        const picked = tab.loginProvider; tab.loginProvider = null; qrClose(record, tab, 'ready'); commitLogin(tab, 'ready');
+        setContainer(tab.slot, { provider: String(state.provider || picked || ''), status: 'landing' });
         log('login-trace ready slot=', tab.slot, 'provider=', state.provider);
         return;
       }
+      /* 拿到码之前的网络类失败（超时／连接失败）：自动重试最多 3 次，卡上写明第几次；用完才交给玩家点码重来 */
+      const code = String(state?.error?.code || '');
+      const retryable = state?.error && (tab.loginSeen === '' || tab.loginSeen === 'loading' || tab.loginSeen === 'retrying') && /TIMEOUT|NETWORK|^ERR_/i.test(code);
+      if (retryable && tab.loginRetries < 3) {
+        tab.loginRetries += 1; tab.loginSeen = 'retrying'; const n = tab.loginRetries; const id = tab.loginProvider; const requestId = ++tab.loginRequest; /* 编号一换，旧尝试的快照都被丢弃 */
+        log('login-trace retry-auto slot=', tab.slot, 'n=', n, 'code=', code);
+        qrUpdate(tab, { provider: providerById(id)?.label || '', stage: 'retrying', qr: '', text: '', retry: n }); /* 文案由卡片按一行预算写（qr-copy.ts） */
+        setTimeout(() => { /* 停 1.5 秒是节奏：让「正在重试（n/3）」看得见，不是等旧任务（注入器自己等它结束） */
+          if (tab.loginRequest !== requestId || tab.loginProvider !== id || tab.contents.isDestroyed()) return;
+          tab.loginStartedFor = requestId;
+          tab.contents.send('jnd-login-start', { provider: id, requestId });
+        }, 1500);
+        return;
+      }
+      if (tab.loginSeen === 'retrying' && !state?.error && !state?.qr && !/ready/.test(String(state?.stage || ''))) return; /* 重试进行中，取消／重新发起过程中的空快照不回落成「获取中」 */
       const stage = qrStage(tab, state);
       if (stage !== tab.loginSeen || stage === 'scan') { /* 阶段变了才记；scan 阶段二维码可能刷新，照常推 */
         if (stage !== tab.loginSeen) log('login-trace stage slot=', tab.slot, 'script=', state?.stage, 'card=', stage, 'qr=', state?.qr ? 'yes' : 'no', state?.error ? JSON.stringify(state.error) : '');
         tab.loginSeen = stage;
-        const option = providerById(tab.loginOptionId || tab.loginProvider);
-        chromeSend(record, 'jnd-chrome-qr', { action: 'update', id: tab.id, provider: option?.label || '', brand: option?.brand || '', mode: tab.loginMode || 'qr', stage, qr: String(state?.qr || ''), text: String(state?.text || '') });
-        if (stage === 'error') closeAuthWindow(tab);
+        qrUpdate(tab, { provider: providerById(tab.loginProvider)?.label || '', stage, qr: String(state?.qr || ''), text: String(state?.text || ''), code: String(state?.error?.code || '') });
       }
     });
     ipcMain.on('jnd-chrome-qr-cancel', (event, m) => { const record = [...windows.values()].find(r => r.chrome.webContents === event.sender); const tab = record?.tabs.get(Number(m?.id)); if (record && tab) cancelProviderLogin(record, tab, 'card-cancel'); });
     ipcMain.on('jnd-chrome-qr-retry', (event, m) => {
       const record = [...windows.values()].find(r => r.chrome.webContents === event.sender);
       const tab = record?.tabs.get(Number(m?.id));
-      if (!record || !tab || !tab.loginProvider) return;
+      if (!record || !tab || !tab.loginProvider || tab.contents.isDestroyed()) return;
       const id = tab.loginProvider;
-      tab.loginProvider = null; tab.loginMode = ''; tab.loginOptionId = ''; tab.loginNonce = ''; tab.loginState = ''; tab.loginAuthCompleted = false;
+      if (tab.loginStartedFor !== tab.loginRequest) { /* 登录桥一直没发起过：重载登录页再来，卡不重建 */
+        log('login-trace retry reload slot=', tab.slot, id);
+        tab.loginProvider = null; startProviderLogin(record, tab, id, { reload: true });
+        return;
+      }
+      const requestId = ++tab.loginRequest; tab.loginStartedFor = requestId;
       log('login-trace retry slot=', tab.slot, id);
-      if (!tab.contents.isDestroyed()) tab.contents.send('jnd-login-cancel');
-      closeAuthWindow(tab); qrClose(record, tab, 'retry');
-      setTimeout(() => startProviderLogin(record, tab, id), 200);
+      tab.loginSeen = 'loading'; tab.loginRetries = 0;
+      qrUpdate(tab, { provider: providerById(id)?.label || '', stage: 'loading', qr: '', text: '' });
+      // preload 等旧任务真正结束后再发起，不依赖固定延时。
+      tab.contents.send('jnd-login-start', { provider: id, requestId });
     });
+    /* 网页登录（作者 10-21）：扫码卡上的「使用网页登录」→ 窗口内浮层打开官方登录页；外框与关闭键由 chrome 画，页面区的位置由 chrome 报回 */
+    ipcMain.on('jnd-chrome-qr-web', (event, m) => {
+      const record = [...windows.values()].find(r => r.chrome.webContents === event.sender);
+      const tab = record?.tabs.get(Number(m?.id));
+      if (record && tab) void openWebSheet(record, tab);
+    });
+    ipcMain.on('jnd-chrome-websheet-rect', (event, m) => {
+      const record = [...windows.values()].find(r => r.chrome.webContents === event.sender);
+      const tab = record?.tabs.get(Number(m?.id)); const sheet = tab?.webSheet;
+      if (!record || !sheet) return;
+      const rect = { x: Math.round(Number(m.x)), y: Math.round(Number(m.y)), width: Math.round(Number(m.w)), height: Math.round(Number(m.h)) };
+      if (!(rect.width > 0 && rect.height > 0)) return;
+      try { sheet.view.setBounds(rect); record.win.contentView.addChildView(sheet.view); sheet.view.setVisible(true); if (record.cur === tab.id) restoreWindowFocus(record); } catch (_) {}
+    });
+    ipcMain.on('jnd-chrome-websheet-close', (event, m) => {
+      const record = [...windows.values()].find(r => r.chrome.webContents === event.sender);
+      record?.tabs.get(Number(m?.id))?.webSheet?.close('user');
+    });
+    ipcMain.on('jnd-login-web-url-result', (event, m) => { const waiter = webUrlWaiters.get(Number(m?.reqId)); if (waiter?.sender === event.sender) { webUrlWaiters.delete(Number(m.reqId)); waiter.done(m); } });
     /* 账号下拉里的「管理密码」→ 打开「账号」内页 */
     ipcMain.on('jnd-open-page', (event, kind) => { const found = tabOf(event.sender); if (found && ['pm', 'settings', 'update', 'about'].includes(String(kind))) chromeSend(found.record, 'jnd-chrome-command', String(kind)); });
 
@@ -1299,6 +1633,7 @@ export = function startMicroClient(config) {
       const nick = String(info?.nickname || ''), uid = String(info?.userId || '');
       found.tab.nick = nick; found.tab.uid = uid;
       setContainer(found.tab.slot, nick || uid ? { nick, uid, status: 'game' } : { nick: '', uid: '', status: 'none' }); // 空值＝退出了
+      if (nick || uid) commitLogin(found.tab, 'identity');
       if (nick && found.tab.lastAccount) { credentials.setNick(found.tab.entryId, found.tab.lastAccount, nick); pushAccounts(); }
       log('identity', 'slot=', found.tab.slot, 'uid=', uid, 'nick=', nick ? 'yes' : 'no');
     });
@@ -1343,6 +1678,7 @@ export = function startMicroClient(config) {
   });
   app.whenReady().then(async () => {
     const payloadDirectory = process.env.JND_MICRO_PAYLOAD_DIR || path.join(__dirname, '..', channel.id, 'payload'); /* JND_MICRO_PAYLOAD_DIR：测试无种子模式时指到空目录 */
+    node_update_host_.useNet(net); /* 运行时／组件／插件下载全部走 Chromium 网络层 */
     updateHost = await createNodeUpdateHost({
       cacheDirectory: path.join(app.getPath('userData'), 'runtime-cache'),
       seedPath: path.join(payloadDirectory, 'jinnangdai.runtime.js'),
@@ -1364,14 +1700,11 @@ export = function startMicroClient(config) {
         return { id: component.id, seedPath, seedVersion };
       }),
     });
-    let gmSessionSerial = 0;
-    gmHost = createGmRequestHost({
-      log, net,
-      isolatedSession: () => electron_.session.fromPartition(
-        `jnd-gm-${process.pid}-${Date.now().toString(36)}-${++gmSessionSerial}`, { cache: false }),
-    });
+    gmHost = createGmRequestHost({ log, net, isolatedSession: index => electron_.session.fromPartition(`jnd-gm-${process.pid}-${index}`, { cache: false }), trace: e => loginRecorder?.gm(e),
+      steamDirect: createSteamDirectConnector({ log, cacheFile: path.join(app.getPath('userData'), 'steam-direct-addresses.json'),
+        resolveProxy: url => electron_.session.defaultSession.resolveProxy(url) }) });
     shellUpdateHost = createShellUpdateHost({
-      log,
+      log, net,
       shellVersion: channel.shellVersion,
       stagingDirectory: path.join(app.getPath('userData'), 'shell-update'),
       // 便携目录里本壳就是 resources/app.asar；源码直跑时 getAppPath 是目录，宿主会跳过换文件。
@@ -1387,14 +1720,23 @@ export = function startMicroClient(config) {
     try {
       const keepSlots = new Set<number>([...(uiSettings().restore ? (readSettings().session?.tabs || []) : []), ...closedList()].map(t => Number(t.slot) || 0));
       const prefix = `jinnangdai-${channel.id}-`;
-      for (const name of fs.readdirSync(path.join(app.getPath('userData'), 'Partitions'))) {
+      const partitions = path.join(app.getPath('userData'), 'Partitions');
+      /* 不再用的槽位直接删目录（作者 10-21）：此刻还没有任何会话打开，删目录是安全的。原来对每个死槽位都 fromPartition 新建一个会话再清存储，
+         目录与缓存照样留着——启动越用越慢、磁盘只增不减。槽位号只增不复用不变（新标签必须是干净的），回收的是磁盘 */
+      let removed = 0;
+      for (const name of fs.existsSync(partitions) ? fs.readdirSync(partitions) : []) { /* 全新档案还没有这个目录 */
         if (!name.startsWith(prefix)) continue;
         const slot = Number(name.slice(prefix.length)); if (!slot || keepSlots.has(slot)) continue;
-        wipeSlot(slot);
+        try { fs.rmSync(path.join(partitions, name), { recursive: true, force: true }); removed += 1; } catch (error) { log('partition gc failed', slot, error?.message || error); }
+        try { fs.rmSync(path.join(gmStoreDirectory(), `slot-${slot}`), { recursive: true, force: true }); } catch (_) {}
+        delete containers[slot];
       }
-    } catch (_) {}
+      let dropped = 0;
+      for (const key of Object.keys(containers)) if (!keepSlots.has(Number(key))) { delete containers[key]; dropped += 1; }
+      if (removed || dropped) { writeSettings({ containers }); log('startup partition gc removed=', removed, 'containers dropped=', dropped, 'kept=', keepSlots.size); }
+    } catch (error) { log('startup partition gc failed', error?.message || error); }
     installSharedAssetScheme();
-    installIpc();
+    installIpc(); installRecorderIpc();
     createWindow();
     // 性能证据：每 30 秒把各进程 CPU／内存写进日志（百分比是自上次采样以来的均值），标出是哪个标签的渲染器
     setInterval(() => {
@@ -1423,7 +1765,7 @@ export = function startMicroClient(config) {
   });
   app.on('window-all-closed', () => { log('app.quit: window-all-closed'); app.quit(); });
   // 退出时才换壳：派出的脚本等本进程结束再把 pending 的 app.asar 换上。
-  app.on('will-quit', () => { try { shellUpdateHost?.applyOnQuit(); } catch (error) { log('shell apply failed', error?.message || error); } if (containersTimer) flushContainers(); flushLog(true); });
+  app.on('will-quit', () => { try { shellUpdateHost?.applyOnQuit(); } catch (error) { log('shell apply failed', error?.message || error); } if (containersTimer) flushContainers(); gmFlushAll(); flushLog(true); });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0 && updateHost) createWindow();
   });

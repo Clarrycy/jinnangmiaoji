@@ -17,7 +17,7 @@ function parseHeader(code: string) {
   const header = String(code || '').split('// ==/UserScript==', 1)[0];
   const all = (key: string) => [...header.matchAll(new RegExp(`^\\/\\/\\s*@${key}\\s+(\\S.*?)\\s*$`, 'gm'))].map(m => m[1]);
   const grants = all('grant').filter(g => g !== 'none');
-  return { ...base, match: [...all('match'), ...all('include')], grant: grants.length > 0, updateUrl: all('updateURL')[0] || all('downloadURL')[0] || '' };
+  return { ...base, match: [...all('match'), ...all('include')], exclude: all('exclude'), grant: grants.length > 0, updateUrl: all('updateURL')[0] || all('downloadURL')[0] || '' };
 }
 // @match 通配：* 匹配任意；只比 scheme://host/path 这一段（query 不参与）
 function globToRegExp(glob: string) {
@@ -106,8 +106,8 @@ function createPluginStore(options: { directory: string; log?: (...args: any[]) 
     remove(id: string) { if (!store.plugins[id]) return; delete store.plugins[id]; flush(); try { fs.unlinkSync(codeFile(id)); } catch (_) {} log('plugin removed', id); },
     // 注入器用：启用的插件带代码
     startupRecords() {
-      const result: Record<string, { id: string; name: string; version: string; code: string; match: string[]; gm: boolean; connect: string[]; source: string }> = {};
-      for (const m of Object.values(store.plugins)) { if (!m.enabled) continue; const code = readCode(m.id); if (!code) continue; result[m.id] = { id: m.id, name: m.name, version: m.version, code, match: m.match, gm: m.grant, connect: m.connect, source: 'plugin' }; }
+      const result: Record<string, { id: string; name: string; version: string; code: string; match: string[]; exclude: string[]; gm: boolean; connect: string[]; source: string }> = {};
+      for (const m of Object.values(store.plugins)) { if (!m.enabled) continue; const code = readCode(m.id); if (!code) continue; result[m.id] = { id: m.id, name: m.name, version: m.version, code, match: m.match, exclude: parseHeader(code).exclude, gm: m.grant, connect: m.connect, source: 'plugin' }; }
       return result;
     },
   });

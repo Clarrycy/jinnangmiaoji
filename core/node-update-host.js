@@ -14,7 +14,87 @@ function sha256(payload) {
   const value = typeof payload === "string" ? Buffer.from(payload, "utf8") : Buffer.from(payload);
   return crypto.createHash("sha256").update(value).digest("hex");
 }
+let electronNet = null;
+function useNet(net) {
+  electronNet = net && typeof net.request === "function" ? net : null;
+}
+function requestBufferNet(url, options) {
+  const limit = Number(options.maxBytes) || MAX_RUNTIME_BYTES;
+  const timeoutMs = Number(options.timeoutMs) || REQUEST_TIMEOUT_MS;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (cb, v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cb(v);
+    };
+    let hops = 0;
+    const request = electronNet.request({ url, method: "GET", redirect: "manual", useSessionCookies: false });
+    request.setHeader("Accept", options.accept || "*/*");
+    request.setHeader("User-Agent", "Jinnangdai-MicroClient/1.2");
+    const timer = setTimeout(() => {
+      finish(reject, new Error("请求超时"));
+      try {
+        request.abort();
+      } catch (_) {
+      }
+    }, timeoutMs);
+    request.on("redirect", (status, _method, redirectUrl) => {
+      hops += 1;
+      if (hops > 4) {
+        finish(reject, new Error("重定向次数过多"));
+        try {
+          request.abort();
+        } catch (_) {
+        }
+        return;
+      }
+      if (!String(redirectUrl).startsWith("https:")) {
+        finish(reject, new Error("重定向到非 HTTPS 地址"));
+        try {
+          request.abort();
+        } catch (_) {
+        }
+        return;
+      }
+      request.followRedirect();
+    });
+    request.on("response", (response) => {
+      const status = Number(response.statusCode || 0);
+      if (status !== 200) {
+        finish(reject, new Error(`HTTP ${status}`));
+        try {
+          request.abort();
+        } catch (_) {
+        }
+        return;
+      }
+      const chunks = [];
+      let total = 0;
+      response.on("data", (chunk) => {
+        total += chunk.length;
+        if (total > limit) {
+          finish(reject, new Error("响应超过大小限制"));
+          try {
+            request.abort();
+          } catch (_) {
+          }
+          return;
+        }
+        chunks.push(chunk);
+        options.onProgress?.(total);
+      });
+      response.on("end", () => finish(resolve, Buffer.concat(chunks)));
+      response.on("error", (error) => finish(reject, error));
+      response.on("aborted", () => finish(reject, new Error("Response aborted")));
+    });
+    request.on("error", (error) => finish(reject, error));
+    request.end();
+  });
+}
 function requestBuffer(url, options = {}, redirectCount = 0) {
+  if (electronNet) return requestBufferNet(url, options);
   const limit = Number(options.maxBytes) || MAX_RUNTIME_BYTES;
   const timeoutMs = Number(options.timeoutMs) || REQUEST_TIMEOUT_MS;
   if (redirectCount > 4) return Promise.reject(new Error("重定向次数过多"));
@@ -291,5 +371,6 @@ module.exports = {
   PayloadStore,
   createNodeUpdateHost,
   requestBuffer,
-  sha256
+  sha256,
+  useNet
 };

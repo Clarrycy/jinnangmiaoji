@@ -3,20 +3,9 @@ const { ipcRenderer, webFrame } = electron_;
 import components_ = require('./components');
 const { COMPONENTS, parseUserScriptHeader } = components_;
 import entries_ = require('./entries');
-const { ENTRIES, matchesAnyEntry, TEST_ORIGIN } = entries_;
+const { ENTRIES, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 import gm_shim_ = require('./gm-shim');
 const { createGmShim, wrapWithGm } = gm_shim_;
-import direct_login_bridge_ = require('./direct-login-bridge');
-const { installDirectEventBridge } = direct_login_bridge_;
-
-// 主进程打开的渠道官方登录窗口用 additionalArguments 把桥接名带进 preload。
-// 必须在页面脚本之前设置 window.name；Vivo／OPPO 的回调桥用它关联本次登录。
-const AUTH_WINDOW_NAME = (() => {
-  const prefix = '--jnd-auth-window-name=';
-  const value = (process.argv || []).find(argument => argument.startsWith(prefix))?.slice(prefix.length) || '';
-  return /^sgs-(?:vivo|oppo|steam|xiaomi)-[a-f0-9]{32}$/.test(value) ? value : '';
-})();
-if (AUTH_WINDOW_NAME) { try { window.name = AUTH_WINDOW_NAME; } catch (_) {} }
 
 export = function startInjector(config) {
   const channel = String(config?.hostChannel || config?.id || 'unknown');
@@ -60,21 +49,11 @@ export = function startInjector(config) {
     window.__JND_HOST = {
       ...(window.__JND_HOST || {}),
       kind: 'micro',
-      source: 'sgs-multichannel',
       shell: 'Electron',
       shellVersion: String(config?.shellVersion || ''),
       engine: 'Chromium',
       channel: currentHostChannel(),
     };
-  }
-
-  function installDirectEventHost() {
-    installDirectEventBridge({
-      window,
-      storage: window.sessionStorage,
-      send: (name, payload) => ipcRenderer.send(name, payload),
-      report,
-    });
   }
 
   function installUpdateBridge(startupRecord) {
@@ -187,7 +166,7 @@ export = function startInjector(config) {
     let records = {};
     try { records = ipcRenderer.sendSync('jnd-plugins-get-startup-sync') || {}; } catch (_) { return; }
     for (const record of Object.values<any>(records)) {
-      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href)) continue;
+      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href) || pluginMatches(record.exclude || [], location.href)) continue; /* @exclude 也生效 */
       injectedPlugins.add(record.id);
       const sourceName = `jnd-plugin-${record.id}-${record.version}.user.js`;
       try {
@@ -248,6 +227,15 @@ export = function startInjector(config) {
     style.id = 'jnd-micro-landing-fit';
     // 能放下时隐藏滚动条；放不下（长门户页）时恢复滚动，不缩到看不清。
     const HIDE = 'html,body{overflow:hidden!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+    /* 整页缩放只给官服登录页（固定 1600×900 的一屏页，作者 10-19 定）。第三方门户是可以滚的长网页：只藏滚动条、正常滚，不缩放（作者 10-21）。
+       原来门户也按「缩到放得下」处理：360 首页加载时量到 1233 就缩到 73% 并锁住滚动，内容后长到 1521 也滚不动；
+       加了「内容变高就重量」之后，缩放本身改变版面又触发重量，在「缩 62% 锁住」和「可滚」之间来回翻（真机日志 08:09 起每秒数次） */
+    if (!isOfficialLoginPage(currentUrl() || new URL('about:blank'))) {
+      style.textContent = '::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+      const mountPlain = () => { const root = document.head || document.documentElement; if (!root) return false; if (!style.isConnected) root.append(style); return true; };
+      if (!mountPlain()) { const mo = new MutationObserver(() => { if (mountPlain()) mo.disconnect(); }); mo.observe(document, { childList: true, subtree: true }); }
+      return;
+    }
     style.textContent = HIDE;
     // document-start 时 <html> 还不存在：等它出现立刻挂上（先于首帧，避免滚动条闪现导致内容左右跳）。
     const mount = () => {
@@ -300,9 +288,14 @@ export = function startInjector(config) {
       html.style.zoom = String(zoom);
     };
     const schedule = () => { clearTimeout(timer); timer = setTimeout(fit, 80); };
+    /* 内容尺寸一变就重量（作者 10-21）：单页应用的门户（百度详情页）加载完时还是空壳，量出来「放得下」就锁了滚动，内容后长到 1692 也再不重量 */
+    const sizeWatch = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    const watchBody = () => { if (!document.body) return false; sizeWatch?.observe(document.body); return true; };
+    if (!watchBody()) document.addEventListener('DOMContentLoaded', watchBody, { once: true });
     // 游戏在本文档的 iframe 里开始加载后停止缩放并复位：Laya 画布不能被缩。
     ipcRenderer.on('jnd-landing-game-started', () => {
       stopped = true;
+      sizeWatch?.disconnect();
       window.removeEventListener('resize', schedule);
       clearTimeout(timer);
       document.documentElement.style.zoom = '';
@@ -314,61 +307,112 @@ export = function startInjector(config) {
     setTimeout(fit, 2000);
   }
 
+  // 落地页自动唤起登录（作者 10-21）：4399 官网未登录（顶栏 .my_unlogin 可见）时直接弹它自己的登录框 UniLogin.showPopupLogin，
+  // 不用玩家先找「登录」；每次加载只弹一次，关掉就不再弹，已登录不弹。函数在页面主世界里，所以经 webFrame 执行。
+  function installLandingAutoLogin(url: URL) {
+    if (url.hostname !== 'my.4399.com' || !/^\/yxsgs\/?$/.test(url.pathname)) return;
+    const script = `(() => { let n = 0; const t = setInterval(() => { n += 1; const u = document.querySelector('.my_unlogin'); const api = window.UniLogin;
+      if (api && typeof api.showPopupLogin === 'function' && u) { clearInterval(t); if (u.offsetWidth || u.offsetHeight) api.showPopupLogin('', '', true); }
+      else if (n > 60) clearInterval(t); }, 250); })();`;
+    void webFrame.executeJavaScript(script, true).catch(error => report('warn', `4399 登录框唤起失败：${error?.message || error}`));
+  }
+
   // 官方登录页：把统一登录器的二维码／状态投影给壳（扫码窗），并接受壳的发起／取消。
   const OFFICIAL_LOGIN_PATHS = ['/login/index.html', '/login/x/index'];
   function isOfficialLoginPage(url) {
     if (TEST_ORIGIN && url.origin === TEST_ORIGIN) return OFFICIAL_LOGIN_PATHS.includes(url.pathname);
     return url.origin === 'https://web.sanguosha.com' && OFFICIAL_LOGIN_PATHS.includes(url.pathname);
   }
+  // 落地页减法：按站点去广告位（规则在 entries.ts 的 LANDING_TRIM：官服下载条与适龄角标、4399 官网浮动广告）；document-start 就挂样式，不等页面画完再消失
+  { const css = landingTrimCss(location.hostname); const mount = () => { if (!css) return true; try { if (!document.documentElement || document.getElementById('jnd-landing-trim')) return false; const st = document.createElement('style'); st.id = 'jnd-landing-trim'; st.textContent = css; document.documentElement.append(st); return true; } catch (_) { return false; } }; if (!mount()) { const mo = new MutationObserver(() => { if (mount()) mo.disconnect(); }); mo.observe(document, { childList: true, subtree: true }); } } /* preload 跑在 <html> 之前，直接 append 会静默失败，原来等于到页面加载完才由主进程补 */
   // 落地页登录态：官方页登录后画「昵称／退出登录／进入游戏」面板（#nickName／#logoutBtn）；官服账号这里有昵称，渠道账号没有。
-  // 变化就报给壳：已登录＋昵称＋这次用的第三方方式（来自统一登录器的快照），回到登录表单＝退出。
+  // 只报「已登录＋昵称」，回到登录表单＝退出。登录方式不由这里报：它只由点选方式与扫码 ready 写（审计 C7：原来这里记住上次点过的方式、
+  // 永远不清，取消扫码后改用官方账号登录，档案会被写成那个第三方方式）。
   function installLandingWatcher() {
-    let last = '', lastProvider = null, attached = false;
-    const attachProvider = () => { const bridge = window.__JND_UNIFIED_LOGIN; if (!bridge || attached) return; attached = true; try { bridge.subscribe(state => { if (state?.provider) lastProvider = String(state.provider); }); } catch (_) {} };
+    let last = '';
     const tick = () => {
-      attachProvider();
       const loggedIn = Boolean(document.getElementById('logoutBtn'));
       const nickname = loggedIn ? String(document.getElementById('nickName')?.textContent || '').trim() : '';
       const form = Boolean(document.getElementById('SGS_login-account'));
       if (!loggedIn && !form) return; // 页面还没画完
-      const key = `${loggedIn ? 1 : 0}:${nickname}:${lastProvider || ''}`; if (key === last) return; last = key;
-      try { ipcRenderer.send('jnd-landing-state', { loggedIn, nickname, provider: lastProvider }); } catch (_) {}
+      const key = `${loggedIn ? 1 : 0}:${nickname}`; if (key === last) return; last = key;
+      try { ipcRenderer.send('jnd-landing-state', { loggedIn, nickname }); } catch (_) {}
     };
     setInterval(tick, 500);
   }
   function installLoginBridge() {
+    type LoginRequest = { provider: string; requestId: number; web?: Record<string, string> | null };
     let unsubscribe = null;
-    let pending: { provider: string; mode: 'qr' | 'browser'; nonce: string; state: string } | null = null;
-    const startLogin = request => {
-      const provider = String(request?.provider || '');
-      if (!provider) return;
-      const options = {
-        mode: request?.mode === 'browser' ? 'browser' : 'qr',
-        ...(request?.nonce ? { nonce: String(request.nonce) } : {}),
-        ...(request?.state ? { state: String(request.state) } : {}),
-      };
-      return window.__JND_UNIFIED_LOGIN.start(provider, options).catch(error => report('warn', `统一登录器发起失败：${error?.message || error}`));
+    let pending: LoginRequest | null = null, current: LoginRequest | null = null;
+    let draining = false, accepting = false, revision = 0;
+    const forward = state => {
+      if (!accepting || !current || (state.provider && state.provider !== current.provider)) return;
+      try { ipcRenderer.send('jnd-login-state', { ...state, requestId: current.requestId, requestProvider: current.provider }); } catch (_) {}
+    };
+    const drain = async () => {
+      const bridge = window.__JND_UNIFIED_LOGIN;
+      if (draining || !bridge || !pending) return;
+      draining = true;
+      try {
+        while (pending) {
+          const request = pending, ownRevision = revision; pending = null;
+          accepting = false;
+          bridge.cancel();
+          // cancel 会中止请求；旧 start 的 finally 释放 busy 后才能换渠道。
+          while (bridge.get().busy && ownRevision === revision) await new Promise(resolve => setTimeout(resolve, 100));
+          if (ownRevision !== revision) continue;
+          current = request; accepting = true;
+          try { await (request.web && bridge.webFinish ? bridge.webFinish(request.provider, request.web) : bridge.start(request.provider)); }
+          catch (error) {
+            if (ownRevision === revision) forward({ provider: request.provider, stage: '', qr: '', text: '', error: { code: 'LOGIN_START_FAILED' } });
+            report('warn', 'LOGIN_START_FAILED');
+          } finally { delete request.web; }
+        }
+      } finally { draining = false; }
     };
     const attach = () => {
       const bridge = window.__JND_UNIFIED_LOGIN;
       if (!bridge || unsubscribe) return Boolean(bridge);
-      unsubscribe = bridge.subscribe(state => { try { ipcRenderer.send('jnd-login-state', state); } catch (_) {} });
-      /* 订阅只在二维码变化时通知；「已扫码待确认」这种阶段变化靠轮询快照拿 */
-      let last = ''; setInterval(() => { try { const s = bridge.get(); const key = `${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ''}`; if (key !== last) { last = key; ipcRenderer.send('jnd-login-state', s); } } catch (_) {} }, 400);
-      if (pending) { const request = pending; pending = null; void startLogin(request); }
+      unsubscribe = bridge.subscribe(forward);
+      ipcRenderer.send('jnd-login-bridge-ready');
+      /* 订阅只在二维码变化时通知；阶段变化同时靠轮询快照拿。 */
+      let last = '';
+      setInterval(() => {
+        try {
+          if (!accepting || !current) return;
+          const s = bridge.get(); const key = `${current.requestId}|${s.provider}|${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ''}`;
+          if (key !== last) { last = key; forward(s); }
+        } catch (_) {}
+      }, 400);
       return true;
     };
     ipcRenderer.on('jnd-login-start', (_event, request) => {
-      const value = typeof request === 'string' ? { provider: request } : request;
-      const normalized = { provider: String(value?.provider || ''), mode: value?.mode === 'browser' ? 'browser' as const : 'qr' as const,
-        nonce: String(value?.nonce || ''), state: String(value?.state || '') };
-      if (!normalized.provider) return;
-      if (attach()) void startLogin(normalized); else pending = normalized;
+      if (!request || typeof request.provider !== 'string' || !Number.isSafeInteger(request.requestId)) return;
+      revision += 1; accepting = false; pending = { provider: request.provider, requestId: request.requestId };
+      // 先关消息入口再取消，取消过程中的旧快照也不能贴到新标题下。
+      try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
+      if (attach()) void drain();
     });
-    ipcRenderer.on('jnd-login-cancel', () => { pending = null; try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {} });
+    // 网页登录（作者 10-21）：壳要官方登录页地址（Steam 的地址绑定这次的 state）；登录页走完后壳把结果交回来，按同一套请求编号接着换取
+    ipcRenderer.on('jnd-login-web-url', (_event, request) => {
+      const reply = (url: string, error: string) => { try { ipcRenderer.send('jnd-login-web-url-result', { reqId: request?.reqId, url, error }); } catch (_) {} };
+      /* QQ 要先请求一次才拿得到登录页地址，所以是异步的 */
+      Promise.resolve().then(() => window.__JND_UNIFIED_LOGIN?.webURL?.(String(request?.provider || '')))
+        .then(url => reply(String(url || ''), ''), e => reply('', String(e?.message || e?.code || e)));
+    });
+    ipcRenderer.on('jnd-login-web-finish', (_event, request) => {
+      if (!request || typeof request.provider !== 'string' || !Number.isSafeInteger(request.requestId) || !request.web || typeof request.web !== 'object') return;
+      revision += 1; accepting = false; pending = { provider: request.provider, requestId: request.requestId, web: request.web };
+      try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
+      if (attach()) void drain();
+    });
+    ipcRenderer.on('jnd-login-cancel', () => {
+      revision += 1; pending = null; accepting = false; current = null;
+      try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
+    });
     // 脚本在 DOMContentLoaded 挂载；轮询到桥出现为止（最多 20 秒）。
     let tries = 0;
-    const timer = setInterval(() => { tries += 1; if (attach() || tries > 80) clearInterval(timer); }, 250);
+    const timer = setInterval(() => { tries += 1; if (attach()) { clearInterval(timer); void drain(); } else if (tries > 80) { clearInterval(timer); report('warn', '统一登录器 20 秒内没有挂载，扫码无法发起'); } }, 250);
   }
 
   // 账号簿：官方「游卡通行证」表单（sgslogin-sdk：#SGS_login-account／#SGS_login-password／#SGS_login-btn）。
@@ -526,7 +570,6 @@ export = function startInjector(config) {
 
   async function injectStartupRuntime() {
     installHostFacts();
-    installDirectEventHost();
     const url = currentUrl();
     if (!url) return false;
     const game = isGameDocument();
@@ -548,9 +591,10 @@ export = function startInjector(config) {
     }
     if (game) { try { await injectPlugins(); } catch (error) { report('warn', `插件注入失败：${error.message}`); } }
     if (!game) {
-      if (process.isMainFrame && isOfficialLoginPage(url)) {
+      if (process.isMainFrame && /^https?:$/.test(url.protocol)) {
         try { installLandingNetworkGuard(); } catch (error) { report('warn', `落地页网络守卫失败：${error.message}`); }
         try { installLandingFit(); } catch (error) { report('warn', `落地页适配失败：${error.message}`); }
+        try { installLandingAutoLogin(url); } catch (error) { report('warn', `落地页登录唤起失败：${error.message}`); }
       }
       return false;
     }

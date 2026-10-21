@@ -15,7 +15,9 @@ function createSession(initial = []) {
     calls,
     cookies: {
       async get() { calls.get += 1; return [...cookies.values()].map(cookie => ({ ...cookie })); },
+      async remove(url, name) { for (const [key, c] of cookies) if (c.name === name && c.domain === new URL(url).hostname) cookies.delete(key); },
       async set(cookie) {
+        assert.equal(typeof cookie.url, 'string', 'Electron cookies.set requires url');
         calls.set.push({ ...cookie });
         const domain = String(cookie.domain || new URL(cookie.url).hostname).replace(/^\./, '');
         const value = { ...cookie, domain, path: cookie.path || '/', hostOnly: cookie.hostOnly ?? !cookie.domain };
@@ -105,10 +107,10 @@ function respond(request, status, headers, body) {
 
   assert.equal(followed.status, 200);
   assert.equal(followed.responseText, 'landed');
-  assert.match(followed.responseHeaders, /^set-cookie: auto=1;/im);
+  assert.doesNotMatch(followed.responseHeaders, /^set-cookie: auto=1;/im, 'final response excludes earlier-hop cookies');
   assert.match(followed.responseHeaders, /^set-cookie: landing=2;/im);
   assert.deepEqual(followJar.calls.set.map(cookie => cookie.name).sort(), ['auto', 'browser', 'landing']);
-  assert.equal(sourceWithCookie.calls.set.length, 0);
+  assert.deepEqual(sourceWithCookie.calls.set.map(c => c.name).sort(), ['auto', 'landing'], 'ordinary requests persist new cookies into the caller account');
   assert.equal(followJar.calls.cleared, 1);
   assert.equal(followHost.activeCount(), 0);
   console.log('gm request cookie jar tests passed');
