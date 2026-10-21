@@ -528,7 +528,7 @@
   const VIVO_PAGE_RESULT_KEY = 'sgs-vivo-page-result-v1:';
   const VIVO_PAGE_STATE_PREFIX = 'sgs-vivo-page-state-v1:';
   const OPPO_PAGE_RESULT_KEY = 'sgs-oppo-page-result-v1:';
-  const XIAOMI_PAGE_RESULT_KEY = XIAOMI_PAGE_RESULT_PREFIX;
+  const XIAOMI_PAGE_RESULT_KEY = 'sgs-xiaomi-page-result-v1:';
   const OPPO_CHANNEL = 320123;
   const BILI_CHANNEL = '120133';
   const WEGAME_CHANNEL = 320023;

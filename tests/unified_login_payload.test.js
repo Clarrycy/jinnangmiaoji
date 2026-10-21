@@ -2,6 +2,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { isUnifiedLoginPage, parseUserScriptHeader } = require('../core/components');
 const { PROVIDERS } = require('../core/entries');
 
@@ -65,4 +66,31 @@ const callbackPages = [
 for (const value of callbackPages) assert.equal(isUnifiedLoginPage(new URL(value)), true, value);
 assert.equal(isUnifiedLoginPage(new URL('https://web.sanguosha.com/news/1')), false);
 assert.equal(isUnifiedLoginPage(new URL('https://example.com/game-union-h5/h5/client-login/')), false);
+
+// DIRECT-ENGINE 是独立 IIFE，不能直接读主机 IIFE 里的局部常量。用最小 DOM 桩执行它的
+// 顶层声明和函数定义，把 mount 留到浏览器里；跨 IIFE 的 ReferenceError 会在这里直接失败。
+const begin = code.indexOf('/* DIRECT-ENGINE-BEGIN */');
+const end = code.indexOf('/* DIRECT-ENGINE-END */');
+const directEngine = code.slice(begin, end)
+  .replace(/if \(document\.body\) mount\(\); else document\.addEventListener\('DOMContentLoaded', mount, \{once: true\}\);/, 'void mount;');
+const element = () => ({ style: {}, classList: { add() {}, remove() {}, toggle() {} }, append() {}, appendChild() {},
+  setAttribute() {}, addEventListener() {}, removeEventListener() {}, attachShadow: () => ({ append() {} }) });
+const sandbox = {
+  console, URL, URLSearchParams, TextEncoder, TextDecoder, crypto: globalThis.crypto,
+  setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+  location: new URL('https://web.sanguosha.com/login/x/index'),
+  navigator: { userAgent: 'test', language: 'zh-CN' },
+  document: { body: {}, documentElement: {}, getElementById: () => null, addEventListener() {}, createElement: element },
+  GM_xmlhttpRequest: () => ({ abort() {} }), GM_getValue: () => null, GM_setValue() {}, GM_deleteValue() {},
+  GM_listValues: () => [], GM_info: {}, performance: { now: () => 0 },
+  atob: value => Buffer.from(value, 'base64').toString('binary'),
+  btoa: value => Buffer.from(value, 'binary').toString('base64'),
+  Event: class {}, CustomEvent: class {}, EventTarget: class { addEventListener() {} removeEventListener() {} dispatchEvent() {} },
+  MessageChannel: class { constructor() { this.port1 = {}; this.port2 = {}; } },
+  fetch: async () => { throw new Error('no fetch'); }, Image: class {}, MutationObserver: class { observe() {} disconnect() {} },
+};
+sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox; sandbox.top = sandbox;
+sandbox.unsafeWindow = sandbox;
+vm.runInContext(directEngine, vm.createContext(sandbox), { filename: 'unified-login-direct-engine.js' });
+
 console.log('unified login payload tests passed');
