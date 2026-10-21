@@ -53,6 +53,7 @@ ${esbuild.buildSync({ entryPoints: [path.join(__dirname, 'shell-harness.entry.ts
     ['标签列表', () => { toggleTabList(wins[0]); }],
     ['对话框与气泡', () => { savePrompt({ account: 'demo_user_01', password: 'demo-password-01', mode: 'new' }); document.querySelector('.caption .cx').click(); const c = document.querySelector('.dlg .dchk input'); if (c) c.checked = true; toast('已保存设置'); }],
     ['扫码', () => { qrPrompt({ provider: 'WeGame - QQ', stage: 'scan', qr: fakeQr(), text: '' }); }],
+    ['扫码出错', () => { qrPrompt({ provider: 'OPPO 扫码登录', stage: 'error', qr: '', text: '', code: 'OPPO_TE_UNAVAILABLE' }); }],
   ];
   /* demo 用的假二维码：定位图案＋伪随机矩阵，只为看版式 */
   const fakeQr = () => { const n = 33, c = document.createElement('canvas'); c.width = c.height = n; const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, n, n); g.fillStyle = '#000'; let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }; for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (rnd() < .45) g.fillRect(x, y, 1, 1); const finder = (x, y) => { g.fillStyle = '#fff'; g.fillRect(x - 1, y - 1, 9, 9); g.fillStyle = '#000'; g.fillRect(x, y, 7, 7); g.fillStyle = '#fff'; g.fillRect(x + 1, y + 1, 5, 5); g.fillStyle = '#000'; g.fillRect(x + 2, y + 2, 3, 3); }; finder(1, 1); finder(n - 8, 1); finder(1, n - 8); return c.toDataURL('image/png'); };

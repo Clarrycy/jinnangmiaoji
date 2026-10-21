@@ -1,13 +1,14 @@
 // 由 src/core/chrome/engine.ts 生成（node scripts/build-ts.js）；改源文件，不要改这里。
 "use strict";
 const BRAND_ICON = require("./brand-icons");
+const qrCopy = require("./qr-copy");
 const jsQR = require("jsqr");
 const qrcodegen = require("qrcode-generator");
 function mountChrome(opts) {
   const { S, ICON, SPEC, host } = opts;
   const ENTRIES = ["官服", "4399", "QQ 大厅", "7K7K", "百度", "360"];
   const PROVIDERS = ["WeGame - QQ", "WeGame - 微信", "bilibili 扫码登录", "Steam 扫码登录", "OPPO 扫码登录", "小米扫码登录", "VIVO 扫码登录", "华为扫码登录", "荣耀扫码登录"];
-  const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀" };
+  const PROVIDER_CHIP = { "WeGame - QQ": "WeGame", "WeGame - 微信": "WeGame", "bilibili 扫码登录": "bilibili", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀" };
   const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
   const NICKS = ["范例玩家甲", "范例玩家乙", "范例玩家丙", "小号二", "小号三"];
   const settings = host.data.settings;
@@ -67,8 +68,11 @@ function mountChrome(opts) {
     w.tabs.splice(i, 1);
     w.tabs.splice(toIndex, 0, t);
   }
+  function freshTab() {
+    return makeTab({ entry: "官服", born: true });
+  }
   function newTabAfter(w, t) {
-    const n = makeTab({ entry: t.entry, provider: t.provider, born: true });
+    const n = freshTab();
     openTab(w, n, w.tabs.indexOf(t) + 1);
     return n;
   }
@@ -192,7 +196,7 @@ function mountChrome(opts) {
         }, 1500);
       };
       q(el, ".newtab").onclick = () => {
-        openTab(w, makeTab({ entry: curTab(w).entry || "官服", provider: curTab(w).provider, born: true }));
+        openTab(w, freshTab());
         render(w);
       };
       q(el, ".tablist").onclick = (e) => {
@@ -618,7 +622,7 @@ function mountChrome(opts) {
       const sep = document.createElement("div");
       sep.className = "sep";
       m.append(sep);
-      const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] + " 扫码" : "其他渠道服", () => {
+      const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] : "其他渠道服", () => {
         subOpen = !subOpen;
         draw();
       }, { sub: true, open: subOpen });
@@ -865,7 +869,7 @@ function mountChrome(opts) {
     if (!w) return;
     const t = curTab(w);
     if (name === "newTab") {
-      openTab(w, makeTab({ entry: t.entry || "官服", provider: t.provider, born: true }));
+      openTab(w, freshTab());
       render(w);
     } else if (name === "closeTab") {
       removeTab(w, t);
@@ -880,6 +884,7 @@ function mountChrome(opts) {
     } else if (name === "tabList") {
       if (hasList(w)) toggleTabList(w);
     } else if (name === "menu") q(winEl(w), ".more").click();
+    else if (name === "fullscreen") host.window?.command("fullscreen");
     else if (name === "pm" || name === "settings" || name === "update" || name === "about") {
       closeAll();
       openPage(w, name);
@@ -903,6 +908,7 @@ function mountChrome(opts) {
     if (e.altKey && k === "f") return "menu";
     if (e.altKey && e.key === "ArrowLeft") return "back";
     if (e.altKey && e.key === "ArrowRight") return "fwd";
+    if (e.key === "F11" && !document.body.classList.contains("mac")) return "fullscreen";
     return null;
   }
   document.addEventListener("keydown", (e) => {
@@ -1151,7 +1157,11 @@ function mountChrome(opts) {
   }
   function dialog(o) {
     const vp = document.querySelector(".win #viewport");
-    vp.querySelector(".scrim")?.remove();
+    const prev = vp.querySelector(".scrim:not(.qr-scrim)");
+    if (prev) {
+      if (prev._dispose) prev._dispose();
+      else prev.remove();
+    }
     const scrim = document.createElement("div");
     scrim.className = "scrim";
     scrim.innerHTML = '<div class="dlg" role="dialog"><h3></h3><p></p><label class="dchk" hidden><input type="checkbox"><span></span></label><textarea class="dnote" hidden rows="3"></textarea><div class="acts"><button class="tb"></button><button class="tb primary"></button></div></div>';
@@ -1178,8 +1188,12 @@ function mountChrome(opts) {
       document.removeEventListener("keydown", onKey);
       setTimeout(() => {
         scrim.remove();
-        if (!document.querySelector(".scrim")) setCover("dialog", false);
+        if (!document.querySelector(".scrim:not(.qr-scrim)")) setCover("dialog", false);
       }, 160);
+    };
+    scrim._dispose = () => {
+      document.removeEventListener("keydown", onKey);
+      scrim.remove();
     };
     const onKey = (e) => {
       if (e.key === "Escape") close();
@@ -1203,29 +1217,26 @@ function mountChrome(opts) {
       (o.note !== void 0 ? note : dlgEl).focus();
     });
   }
-  let qrEl = null;
-  let qrCancelCb = null;
-  let qrRetryCb = null;
-  let qrTab = null;
-  let qrYield = false;
+  const qrCards = /* @__PURE__ */ new Map();
+  let qrClosing = 0;
+  function qrCoverSync() {
+    setCover("qr", qrClosing > 0 || [...qrCards.values()].some((c) => !c.el.hidden));
+  }
   function syncCardTabs(w) {
-    if (qrEl) qrEl.hidden = qrYield || qrTab !== null && qrTab !== w.cur;
-    if (saveEl) saveEl.hidden = saveTab !== null && saveTab !== w.cur;
+    for (const c of qrCards.values()) c.el.hidden = c.yielded || c.tab !== null && c.tab !== w.cur;
+    qrCoverSync();
+    if (saveEl) {
+      saveEl.hidden = saveTab !== null && saveTab !== w.cur;
+      setCover("save", !saveEl.hidden);
+    }
   }
-  const QR_APP = { "WeGame - QQ": "QQ", "WeGame - 微信": "微信", "bilibili 扫码登录": "哔哩哔哩", "Steam 扫码登录": "Steam", "OPPO 扫码登录": "OPPO", "小米扫码登录": "小米", "VIVO 扫码登录": "VIVO", "华为扫码登录": "华为", "荣耀扫码登录": "荣耀" };
-  function qrTexts(m) {
-    const app = QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, "");
-    const sp = /^[A-Za-z]/.test(app) ? ` ${app} ` : app;
-    if (m.stage === "loading") return ["正在获取二维码", ""];
-    if (m.stage === "scan") return [`用手机${sp}扫码`, "扫码后在手机上确认登录"];
-    if (m.stage === "confirm") return ["已扫码", "请在手机上确认登录"];
-    if (m.stage === "exchanging") return ["正在登录", ""];
-    if (m.stage === "error") return [m.text || "登录未完成", "点击二维码重新获取"];
-    return ["", ""];
-  }
+  const winOfTab = (tab) => wins.find((x) => x.tabs.some((t) => t.id === tab)) || wins[0];
+  document.addEventListener("keydown", onQrKey);
+  const { qrSteps } = qrCopy;
   const qrCache = /* @__PURE__ */ new Map();
   function normalizeQr(src) {
-    if (qrCache.has(src)) return qrCache.get(src);
+    const key = src;
+    if (qrCache.has(key)) return qrCache.get(key);
     const p = new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
@@ -1250,7 +1261,7 @@ function mountChrome(opts) {
           const q2 = qrcodegen(0, "M");
           q2.addData(r.data);
           q2.make();
-          const n = q2.getModuleCount(), quiet = 3, scale = Math.max(2, Math.floor(496 / (n + quiet * 2)));
+          const n = q2.getModuleCount(), quiet = 3, scale = Math.max(2, Math.floor(352 / (n + quiet * 2)));
           const size = (n + quiet * 2) * scale;
           const o = document.createElement("canvas");
           o.width = o.height = size;
@@ -1267,93 +1278,133 @@ function mountChrome(opts) {
       img.onerror = () => resolve(src);
       img.src = src;
     });
-    qrCache.set(src, p);
+    qrCache.set(key, p);
     return p;
   }
-  function closeQr() {
-    const el = qrEl;
-    if (!el) return;
-    qrEl = null;
-    qrCancelCb = null;
-    qrRetryCb = null;
-    qrTab = null;
-    el.classList.remove("in");
-    document.removeEventListener("keydown", onQrKey);
-    setTimeout(() => {
-      el.remove();
-      if (!document.querySelector(".scrim")) setCover("dialog", false);
-    }, 160);
-  }
-  function onQrKey(e) {
-    if (e.key === "Escape") {
-      const cb = qrCancelCb;
-      closeQr();
-      cb?.();
-    }
-  }
-  function updateQr(m) {
-    const el = qrEl;
-    if (!el) return;
-    qrYield = m.stage === "yield";
-    const w0 = wins.find((x) => x.tabs.some((t) => t.id === qrTab)) || wins[0];
-    if (w0) syncCardTabs(w0);
-    if (qrYield) return;
-    const img = q(el, ".qrbox img");
-    const box = q(el, ".qrbox");
-    if (m.qr) {
-      if (img.dataset.src !== m.qr) {
-        img.dataset.src = m.qr;
-        img.src = m.qr;
-        normalizeQr(m.qr).then((u) => {
-          if (img.dataset.src === m.qr) img.src = u;
-        });
-      }
-      img.hidden = false;
-    } else {
-      img.hidden = true;
-      img.removeAttribute("src");
-      delete img.dataset.src;
-    }
-    const [t1, t2] = qrTexts(m);
-    q(el, ".qst").textContent = t1;
-    q(el, ".qsub").textContent = t2;
-    q(el, ".dlg").dataset.stage = m.stage;
-    box.classList.toggle("act", m.stage === "error");
-  }
-  function qrPrompt(m, onCancel, onRetry, tabId) {
-    const vp = document.querySelector(".win #viewport");
-    closeQr();
-    vp.querySelector(".scrim")?.remove();
-    qrTab = tabId ?? null;
-    qrYield = false;
-    const scrim = document.createElement("div");
-    scrim.className = "scrim center";
-    scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><div class="qrbox"><img alt="" hidden><div class="ov"><i class="spin"></i><i class="ok">${S.check}</i><i class="again">${S.refresh || S.update || ""}</i></div></div><div class="qst"></div><div class="qsub"></div></div>`;
-    q(scrim, "h3").textContent = m.provider.replace(/ ?扫码登录$/, "").replace(" - ", " · ");
-    const bi = q(scrim, ".bi");
-    const icon = BRAND_ICON[m.provider];
+  function qrHeader(el, provider) {
+    if (el.dataset.provider === provider) return;
+    el.dataset.provider = provider;
+    q(el, "h3").textContent = provider.replace(/ ?扫码登录$/, "").replace(" - ", " · ");
+    const bi = q(el, ".bi");
+    const icon = BRAND_ICON[provider];
     if (icon) {
       bi.src = icon;
       bi.hidden = false;
+    } else {
+      bi.removeAttribute("src");
+      bi.hidden = true;
     }
+  }
+  function closeQr(tabId) {
+    const key = tabId ?? null;
+    const card = qrCards.get(key);
+    if (!card) return;
+    qrCards.delete(key);
+    const el = card.el;
+    el.classList.add("closing");
+    el.classList.remove("in");
+    qrClosing += 1;
+    setTimeout(() => {
+      el.remove();
+      qrClosing -= 1;
+      qrCoverSync();
+    }, 240);
+  }
+  function onQrKey(e) {
+    if (e.key !== "Escape" || document.querySelector(".scrim:not(.qr-scrim)")) return;
+    const card = [...qrCards.values()].find((c) => !c.el.hidden);
+    if (!card) return;
+    const cb = card.cancel;
+    closeQr(card.tab ?? void 0);
+    cb?.();
+  }
+  function updateQr(m, tabId) {
+    const card = qrCards.get(tabId ?? null);
+    if (!card) return;
+    const el = card.el;
+    card.yielded = m.stage === "yield";
+    syncCardTabs(winOfTab(card.tab));
+    if (card.yielded) return;
+    qrHeader(el, m.provider);
+    const live = () => qrCards.get(card.tab) === card;
+    const img = q(el, ".qrbox img");
+    const qrbox = img.parentElement;
+    if (m.qr && img.dataset.src !== m.qr) {
+      qrbox.classList.remove("has-qr");
+      img.hidden = true;
+      img.removeAttribute("src");
+      img.dataset.src = m.qr;
+      normalizeQr(m.qr).then((u) => {
+        if (!live() || img.dataset.src !== m.qr) return;
+        img.onload = () => {
+          if (!live() || img.dataset.src !== m.qr) return;
+          img.hidden = false;
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (live() && img.dataset.src === m.qr) qrbox.classList.add("has-qr");
+          }));
+        };
+        img.src = u;
+      });
+    } else if (!m.qr && img.dataset.src) {
+      delete img.dataset.src;
+      qrbox.classList.remove("has-qr");
+      setTimeout(() => {
+        if (!img.dataset.src) {
+          img.hidden = true;
+          img.removeAttribute("src");
+        }
+      }, 240);
+    }
+    const sm = qrSteps(m);
+    const lis = el.querySelectorAll(".steps li");
+    sm.steps.forEach((t, i) => {
+      const li = lis[i];
+      const span = li.querySelector("span"), mark = li.querySelector("i");
+      if (li.className !== sm.state[i]) li.className = sm.state[i];
+      if (span.textContent !== t) span.textContent = t;
+      const markHtml = sm.state[i] === "done" ? S.check : sm.state[i] === "busy" ? "" : String(i + 1);
+      if (mark.dataset.v !== markHtml) {
+        mark.dataset.v = markHtml;
+        mark.innerHTML = markHtml;
+      }
+    });
+    const footText = sm.foot;
+    const foot = q(el, ".qst");
+    if (foot.textContent !== footText) {
+      foot.getAnimations().forEach((a) => a.cancel());
+      foot.textContent = footText;
+      if (footText) foot.animate([{ opacity: 0, transform: "translateY(3px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 220, easing: "ease-out" });
+    }
+    q(el, ".dlg").dataset.stage = m.stage;
+  }
+  function qrPrompt(m, onCancel, onRetry, tabId) {
+    const vp = document.querySelector(".win #viewport");
+    const key = tabId ?? null;
+    const old = qrCards.get(key);
+    if (old) {
+      qrCards.delete(key);
+      old.el.remove();
+    }
+    const scrim = document.createElement("div");
+    scrim.className = "scrim center qr-scrim";
+    scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i></div><div class="retry"><button class="rb" type="button">${S.refresh || S.update || ""}<span></span></button></div></div></div>`;
+    const card = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false };
     const cancel = () => {
-      const cb = qrCancelCb;
-      closeQr();
+      const cb = card.cancel;
+      closeQr(tabId);
       cb?.();
     };
-    q(scrim, ".qrbox").onclick = () => {
-      if (q(scrim, ".dlg").dataset.stage === "error") qrRetryCb?.();
+    q(scrim, ".rb span").textContent = qrCopy.RETRY_ACTION;
+    q(scrim, ".rb").onclick = (e) => {
+      e.stopPropagation();
+      if (q(scrim, ".dlg").dataset.stage === "error") card.retry?.();
     };
     scrim.onclick = (e) => {
       if (e.target === scrim) cancel();
     };
-    qrEl = scrim;
-    qrCancelCb = onCancel || null;
-    qrRetryCb = onRetry || null;
-    vp.append(scrim);
-    setCover("dialog", true);
-    document.addEventListener("keydown", onQrKey);
-    updateQr(m);
+    qrCards.set(key, card);
+    vp.insertBefore(scrim, vp.querySelector(".scrim:not(.qr-scrim)"));
+    updateQr(m, tabId);
     const dlgEl = q(scrim, ".dlg");
     dlgEl.tabIndex = -1;
     requestAnimationFrame(() => {
@@ -1883,14 +1934,18 @@ function mountChrome(opts) {
     }
     if (kind === "closed") for (const w of wins) render(w);
   }
+  const winState = { maximized: false, fullscreen: false };
   function setWindow(state) {
-    for (const w of wins) {
-      const el = winEl(w);
-      if (state.maximized !== void 0) {
-        const mx = q(el, ".caption .mx");
-        mx.innerHTML = state.maximized ? S.restore : S.max;
-        mx.dataset.tip = state.maximized ? "向下还原" : "最大化";
-      }
+    if (state.maximized !== void 0) winState.maximized = Boolean(state.maximized);
+    if (state.fullscreen !== void 0) {
+      winState.fullscreen = Boolean(state.fullscreen);
+      document.body.classList.toggle("full", winState.fullscreen);
+    }
+    if (state.maximized !== void 0 || state.fullscreen !== void 0) for (const w of wins) {
+      const mx = q(winEl(w), ".caption .mx");
+      const restore = winState.fullscreen || winState.maximized;
+      mx.innerHTML = restore ? S.restore : S.max;
+      mx.dataset.tip = winState.fullscreen ? "退出全屏" : winState.maximized ? "向下还原" : "最大化";
     }
     if (state.focused !== void 0) document.body.classList.toggle("inactive", !state.focused);
   }

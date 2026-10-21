@@ -6,6 +6,7 @@ const zlib = require("zlib");
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 2e4;
+const MAX_TIMEOUT_MS = 315e3;
 const ALWAYS_ALLOWED = ["sanguosha.com"];
 function hostAllowed(hostname, allowHosts) {
   const host = String(hostname || "").toLowerCase();
@@ -49,7 +50,7 @@ function parseSetCookie(line, url) {
 function createGmRequestHost(options = {}) {
   const log = typeof options.log === "function" ? options.log : () => {
   };
-  const electronNet = options.net && typeof options.net.request === "function" ? options.net : null;
+  const electronNet = options.net && typeof options.net.request === "function" && process.env.JND_GM_NODE !== "1" ? options.net : null;
   const tlsOptions = options.tlsOptions && typeof options.tlsOptions === "object" ? options.tlsOptions : {};
   const active = /* @__PURE__ */ new Map();
   async function sessionCookieHeader(session, url) {
@@ -84,7 +85,8 @@ function createGmRequestHost(options = {}) {
         clearTimeout(timer);
         fn();
       };
-      const req = electronNet.request({ method, url: url.href, session: session || void 0, useSessionCookies: false, redirect: "manual" });
+      const hasReferer = Object.keys(headers).some((k) => k.toLowerCase() === "referer");
+      const req = electronNet.request({ method, url: url.href, useSessionCookies: false, redirect: "manual", ...hasReferer ? { referrerPolicy: "unsafe-url" } : {} });
       for (const [k, v] of Object.entries(headers)) {
         try {
           req.setHeader(k, String(v));
@@ -186,7 +188,7 @@ function createGmRequestHost(options = {}) {
       method: String(input.method || "GET").toUpperCase(),
       headers: {},
       data: input.data,
-      timeout: Math.max(1e3, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, 6e4)),
+      timeout: Math.max(1e3, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)),
       manualRedirect: input.redirect === "manual",
       anonymous: Boolean(input.anonymous),
       explicitCookie: typeof input.cookie === "string" ? input.cookie : null,
@@ -194,15 +196,9 @@ function createGmRequestHost(options = {}) {
     };
     for (const [key, value] of Object.entries(input.headers || {})) {
       if (typeof value !== "string" || !/^[\w-]+$/.test(key)) continue;
-      // Node only accepts ISO-8859-1 header values. A value carrying control
-      // bytes or CJK text (the OPPO risk header x-euler-const is produced by a
-      // wasm SDK and occasionally picks up stray bytes) makes client.request()
-      // throw ERR_INVALID_CHAR synchronously — the request never leaves the
-      // process, yet it used to be reported as a network failure. Reject it here
-      // with the offending code points so the log says what actually happened.
       if (!/^[\t\x20-\x7E\x80-\xFF]*$/.test(value)) {
-        const bad = [...new Set([...value].filter(ch => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
-        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map(ch => "U+" + ch.codePointAt(0).toString(16).toUpperCase()).join(","));
+        const bad = [...new Set([...value].filter((ch) => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
+        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map((ch) => "U+" + ch.codePointAt(0).toString(16).toUpperCase()).join(","));
       }
       request.headers[key] = value;
     }
@@ -258,7 +254,12 @@ function createGmRequestHost(options = {}) {
         return await perform(id, input, context);
       } catch (error) {
         const kind = error?.kind === "timeout" ? "timeout" : error?.kind === "abort" ? "abort" : "error";
-        log("GM request failed", JSON.stringify({ id, kind, message: String(error?.message || error) }));
+        let u = null;
+        try {
+          u = new URL(String(input?.url || ""));
+        } catch (_) {
+        }
+        log("GM request failed", JSON.stringify({ id, kind, message: String(error?.message || error), host: u?.hostname, path: u?.pathname, method: input?.method || "GET", headers: Object.keys(input?.headers || {}), binary: input?.responseType === "arraybuffer", redirect: input?.redirect || "follow", anonymous: Boolean(input?.anonymous), cookie: typeof input?.cookie === "string" ? input.cookie.length : null, transport: electronNet ? "net" : "node" }));
         return { kind, status: 0, statusText: "", responseHeaders: "", finalUrl: String(input?.url || ""), error: String(error?.message || error) };
       }
     },

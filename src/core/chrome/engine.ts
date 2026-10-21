@@ -2,6 +2,7 @@
 // 壳 chrome 引擎：标签栏状态／布局／渲染／拖动、弹层、内页（账号／设置／更新／关于）、对话框与提示条。
 // 不碰宿主：窗口操作、外链、数据都从 host 来。design/shell-harness 与 Electron 壳共用这一份。
 import BRAND_ICON = require('./brand-icons');
+import qrCopy = require('./qr-copy');
 import jsQR = require('jsqr');
 import qrcodegen = require('qrcode-generator');
 type Settings = { restore: boolean; confirmClose: boolean; muteNew: boolean; manager: boolean; stats: boolean };
@@ -17,7 +18,7 @@ type Host = {
   // 以下都是壳才有的宿主能力；没有时引擎走 harness 的演示行为
   tabs?: { open(t: Tab, extra?: { slot?: number; account?: string; adopt?: boolean; restored?: boolean }): void; close(t: Tab): void; activate(t: Tab): void; order?(ids: number[]): void; nav(t: Tab, action: 'back' | 'fwd' | 'reload' | 'stop'): void; mute(t: Tab, muted: boolean): void; entry(t: Tab, entry: string, opts?: { logout?: boolean }): void; provider(t: Tab, provider: string, opts?: { logout?: boolean }): void; qrCancel?(t: Tab): void; detach?(t: Tab, at: { x: number; y: number; grabX: number; kind: string }): void; carry?(at: { x: number; y: number; kind: string }): void; dragEnd?(): void };
   closed?: { forget(c: ClosedTab): void };
-  window?: { command(cmd: 'minimize' | 'maximize' | 'close', reason?: string): void; dragStart?(at: { x: number; y: number }): void; dragEnd?(): void };   // 右上三键；标题栏空白处拖窗由宿主跟鼠标
+  window?: { command(cmd: 'minimize' | 'maximize' | 'close' | 'fullscreen', reason?: string): void; dragStart?(at: { x: number; y: number }): void; dragEnd?(): void };   // 右上三键；标题栏空白处拖窗由宿主跟鼠标
   cover?(full: boolean): void;                 // 壳：chrome 视图要不要盖住游戏区（弹层／对话框／内页打开时）
   settings?: { set(key: keyof Settings, value: boolean): void; logoutAll(): void | Promise<void> };
   accounts?: { update(a: Account, key: 'account' | 'password', value: string): void; remove(a: Account): void; clear(): void };
@@ -44,7 +45,7 @@ function mountChrome(opts: { S: Record<string, string>; ICON: string; SPEC: any;
 // ===== 0 常量 =====
 const ENTRIES = ['官服', '4399', 'QQ 大厅', '7K7K', '百度', '360'];
 const PROVIDERS = ['WeGame - QQ', 'WeGame - 微信', 'bilibili 扫码登录', 'Steam 扫码登录', 'OPPO 扫码登录', '小米扫码登录', 'VIVO 扫码登录', '华为扫码登录', '荣耀扫码登录'];
-const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀' };
+const PROVIDER_CHIP = { 'WeGame - QQ': 'WeGame', 'WeGame - 微信': 'WeGame', 'bilibili 扫码登录': 'bilibili', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀' };
 const TAB_MAX = 240, STRIP_PAD = 6, BAR = SPEC.bar, LIST_BTN = 32, NEW_BTN = 44, DETACH_DY = 28, DRAG_SLOP = 3;
 const NICKS = ['范例玩家甲', '范例玩家乙', '范例玩家丙', '小号二', '小号三']; /* harness 里新标签的假昵称；不要放真实玩家名 */
 const settings = host.data.settings;
@@ -74,7 +75,9 @@ function removeTab(w: Win, t: Tab, opts: { detach?: boolean } = {}) { // 从窗�
 }
 function destroyWin(w: Win) { const i = wins.indexOf(w); if (i >= 0) wins.splice(i, 1); (document.querySelector(`.win[data-win="${w.id}"]`) as HTMLElement | null)?.remove(); }
 function moveTab(w: Win, t: Tab, toIndex: number) { const i = w.tabs.indexOf(t); if (i < 0 || i === toIndex) return; w.tabs.splice(i, 1); w.tabs.splice(toIndex, 0, t); }
-function newTabAfter(w: Win, t: Tab) { const n = makeTab({ entry: t.entry, provider: t.provider, born: true }); openTab(w, n, w.tabs.indexOf(t) + 1); return n; }
+/* 新建标签一律是官服、不带登录方式（作者 10-21）：手机渠道服再开一个扫码不合适，要的话自己切 */
+function freshTab() { return makeTab({ entry: '官服', born: true }); }
+function newTabAfter(w: Win, t: Tab) { const n = freshTab(); openTab(w, n, w.tabs.indexOf(t) + 1); return n; }
 // 关闭窗口：多个标签且设置要求确认时先问；宿主在就交给宿主，否则 harness 里只销毁非主窗口
 function closeWindow(w: Win, reason = 'caption') {
   const go = () => { if (host.window) host.window.command('close', reason); else if (wins.length > 1) destroyWin(w); };
@@ -136,7 +139,7 @@ function winEl(w: Win): HTMLElement {
     q(el, '.back').onclick = () => { const t = curTab(w); if (host.tabs) { host.tabs.nav(t, 'back'); return; } t.hist = [t.hist[0] - 1, t.hist[1] + 1]; render(w); };
     q(el, '.fwd').onclick = () => { const t = curTab(w); if (host.tabs) { host.tabs.nav(t, 'fwd'); return; } t.hist = [t.hist[0] + 1, t.hist[1] - 1]; render(w); };
     q(el, '.reload').onclick = () => { const t = curTab(w); if (host.tabs) { host.tabs.nav(t, t.loading ? 'stop' : 'reload'); return; } const f = el.querySelector(`iframe[data-id="${t.id}"]`) as HTMLIFrameElement | null; if (f) { f.src = f.src; return; } t.loading = !t.loading; render(w); if (t.loading) setTimeout(() => { t.loading = false; render(w); }, 1500); };
-    q(el, '.newtab').onclick = () => { openTab(w, makeTab({ entry: curTab(w).entry || '官服', provider: curTab(w).provider, born: true })); render(w); };
+    q(el, '.newtab').onclick = () => { openTab(w, freshTab()); render(w); };
     q(el, '.tablist').onclick = e => { e.stopPropagation(); toggleTabList(w); };
     q(el, '.tabs').addEventListener('wheel', (e: WheelEvent) => { const L = layout(w, q(el, '.tabs').clientWidth); if (!L.overflow) return; e.preventDefault(); w.scroll += (e.deltaY || e.deltaX); render(w); }, { passive: false });
     q(el, '.more').onclick = e => { e.stopPropagation(); const m = q(el, '.amenu'); const open = m.hidden; closeAll(); m.hidden = !open; setCover('menu', open); };
@@ -276,7 +279,7 @@ function openEntryMenu(w: Win, t: Tab) {
     const switchEntry = (e: string) => { t.entry = e; t.provider = null; t.nick = ''; t.status = 'none'; host.tabs?.entry(t, e, { logout: true }); render(w); };
     for (const e of ENTRIES) m.append(menuItem(e, () => { closeAll(); if (e === t.entry && !t.provider) return; if (loggedIn()) dialog({ title: '切换服务器？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换服务器', onOk: () => switchEntry(e) }); else { t.entry = e; t.provider = null; host.tabs?.entry(t, e); render(w); } }, { checked: e === t.entry && !t.provider }));
     const sep = document.createElement('div'); sep.className = 'sep'; m.append(sep);
-    const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] + ' 扫码' : '其他渠道服', () => { subOpen = !subOpen; draw(); }, { sub: true, open: subOpen }); other.onmouseenter = () => { if (!subOpen) { subOpen = true; draw(); } }; m.append(other);
+    const other = menuItem(t.provider ? PROVIDER_CHIP[t.provider] : '其他渠道服', () => { subOpen = !subOpen; draw(); }, { sub: true, open: subOpen }); other.onmouseenter = () => { if (!subOpen) { subOpen = true; draw(); } }; m.append(other);
     sub.hidden = !subOpen;
     const pickProvider = (p: string, logout: boolean) => { t.provider = p; t.entry = PROVIDER_CHIP[p]; t.nick = ''; t.status = 'none'; render(w); if (host.tabs) host.tabs.provider(t, p, { logout }); else { q(el, '.game').textContent = ''; qrPrompt({ provider: p, stage: 'loading', qr: '', text: '' }); } };
     if (subOpen) { sub.textContent = ''; for (const p of PROVIDERS) sub.append(menuItem(p, () => { closeAll(); if (loggedIn()) dialog({ title: '切换登录方式？', body: '切换服务器会退出当前账号，确定要切换吗？', cancel: '取消', ok: '切换登录方式', onOk: () => pickProvider(p, true) }); else pickProvider(p, false); }, { checked: t.provider === p })); sub.style.left = (r.left - wr.left - 8 + 176 + 2) + 'px'; sub.style.top = (r.bottom - wr.top + 2 + other.offsetTop) + 'px'; }
@@ -311,7 +314,7 @@ function fillTabList(w: Win) { // 列表开着时可以连着关：每关一个�
   const closed = host.data.closed || [];
   if (w.tabs.length < 2 && !closed.length) { m.hidden = true; return; }
   m.textContent = ''; m.hidden = false; setCover('menu', true); const r = q(el, '.tablist').getBoundingClientRect(), wr = el.getBoundingClientRect(); m.style.left = (r.left - wr.left) + 'px';
-  /* 入口列按本列表里最宽的标签算（打开的＋最近关闭的，「WeGame」「哔哩哔哩」都在），不按当前标签算 */
+  /* 入口列按本列表里最宽的标签算（打开的＋最近关闭的，「WeGame」「bilibili」都在），不按当前标签算 */
   const colW = Math.max(0, ...w.tabs.filter(t => t.kind === 'game').map(t => chipWidth(t.entry)), ...closed.map(c => chipWidth(c.entry))) - 12;
   // 名字列保证放得下 7 个汉字（官方昵称上限），列表宽度按各列实际加起来，不让名字被压省略号
   const NAME_W = 7 * 13 + 6; m.style.width = (6 * 2 + 10 * 2 + 16 + 10 + colW + 10 + NAME_W + 10 + 64 + 6 + 14 + 2 + 20) + 'px'; // 内边距 6、行内边距 10、图标 16、列距 10；名字列 7 个字；末列 64 放得下「12 分钟前」
@@ -349,13 +352,14 @@ window.addEventListener('resize', renderAll);
 // 快捷键：标题栏 tooltip 里标的那几个；游戏视图有焦点时由壳转发同名命令
 function command(name: string) {
   const w = wins[0]; if (!w) return; const t = curTab(w);
-  if (name === 'newTab') { openTab(w, makeTab({ entry: t.entry || '官服', provider: t.provider, born: true })); render(w); }
+  if (name === 'newTab') { openTab(w, freshTab()); render(w); }
   else if (name === 'closeTab') { removeTab(w, t); closeAll(); renderAll(); }
   else if (name === 'reload') { if (t.kind === 'game') q(winEl(w), '.reload').click(); }
   else if (name === 'back') { if (t.kind === 'game' && t.hist[0]) q(winEl(w), '.back').click(); }
   else if (name === 'fwd') { if (t.kind === 'game' && t.hist[1]) q(winEl(w), '.fwd').click(); }
   else if (name === 'tabList') { if (hasList(w)) toggleTabList(w); }
   else if (name === 'menu') q(winEl(w), '.more').click();
+  else if (name === 'fullscreen') host.window?.command('fullscreen');
   else if (name === 'pm' || name === 'settings' || name === 'update' || name === 'about') { closeAll(); openPage(w, name); }
   else if (name === 'nextTab' || name === 'prevTab') { const i = w.tabs.indexOf(t); w.cur = w.tabs[(i + (name === 'nextTab' ? 1 : w.tabs.length - 1)) % w.tabs.length].id; closeAll(); render(w); }
   else if (name === 'closeWindow') closeWindow(w, 'command');
@@ -366,6 +370,7 @@ function shortcutOf(e: KeyboardEvent): string | null {
   if (c && !e.shiftKey && k === 't') return 'newTab'; if (c && !e.shiftKey && k === 'w') return 'closeTab'; if (c && !e.shiftKey && k === 'r') return 'reload'; if (e.key === 'F5') return 'reload';
   if (c && k === 'tab') return e.shiftKey ? 'prevTab' : 'nextTab';
   if (e.altKey && k === 'f') return 'menu'; if (e.altKey && e.key === 'ArrowLeft') return 'back'; if (e.altKey && e.key === 'ArrowRight') return 'fwd';
+  if (e.key === 'F11' && !document.body.classList.contains('mac')) return 'fullscreen'; /* Windows：F11 进出全屏（macOS 用绿灯／Ctrl+Cmd+F） */
   return null;
 }
 document.addEventListener('keydown', e => { const name = shortcutOf(e); if (!name) return; e.preventDefault(); command(name); });
@@ -422,12 +427,15 @@ function dismissToast(t: HTMLElement) { clearTimeout((t as any)._timer); if (!t.
 function hideToast() { for (const t of document.querySelectorAll('.win #viewport .toast')) dismissToast(t as HTMLElement); }
 // 对话框：自绘、居中、遮罩；Esc 或点遮罩＝取消，Enter＝确定
 function dialog(o: { title: string; body: string; cancel: string; ok: string; danger?: boolean; check?: string; note?: string; content?: HTMLElement; stay?: boolean; onOk: (checked: boolean, note: string) => void }) {
-  const vp = document.querySelector('.win #viewport') as HTMLElement; vp.querySelector('.scrim')?.remove();
+  const vp = document.querySelector('.win #viewport') as HTMLElement;
+  /* 同时只有一个对话框：替换旧的要连它的按键一起撤（原来只摘 DOM，旧的 Enter 还绑着）；扫码卡不是对话框，不碰（审计 C10） */
+  const prev = vp.querySelector('.scrim:not(.qr-scrim)') as any; if (prev) { if (prev._dispose) prev._dispose(); else prev.remove(); }
   const scrim = document.createElement('div'); scrim.className = 'scrim'; scrim.innerHTML = '<div class="dlg" role="dialog"><h3></h3><p></p><label class="dchk" hidden><input type="checkbox"><span></span></label><textarea class="dnote" hidden rows="3"></textarea><div class="acts"><button class="tb"></button><button class="tb primary"></button></div></div>';
   q(scrim, 'h3').textContent = o.title; q(scrim, 'p').textContent = o.body; if (!o.body) q(scrim, 'p').remove(); if (o.content) q(scrim, '.dlg').insertBefore(o.content, q(scrim, '.dchk')); const cancel = q(scrim, '.acts .tb:not(.primary)'), ok = q(scrim, '.acts .primary'); cancel.textContent = o.cancel; ok.textContent = o.ok; if (o.danger) ok.classList.add('danger');
   if (o.check) { const l = q(scrim, '.dchk'); l.hidden = false; q(l, 'span').textContent = o.check; }
   const note = q(scrim, '.dnote') as unknown as HTMLTextAreaElement; if (o.note !== undefined) { note.hidden = false; note.placeholder = o.note; }
-  const close = () => { scrim.classList.remove('in'); document.removeEventListener('keydown', onKey); setTimeout(() => { scrim.remove(); if (!document.querySelector('.scrim')) setCover('dialog', false); }, 160); };
+  const close = () => { scrim.classList.remove('in'); document.removeEventListener('keydown', onKey); setTimeout(() => { scrim.remove(); if (!document.querySelector('.scrim:not(.qr-scrim)')) setCover('dialog', false); }, 160); };
+  (scrim as any)._dispose = () => { document.removeEventListener('keydown', onKey); scrim.remove(); };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); else if (e.key === 'Enter' && document.activeElement !== note) ok.click(); };
   cancel.onclick = close; ok.onclick = () => { o.onOk((scrim.querySelector('input') as HTMLInputElement).checked, note.value.trim()); if (!o.stay) close(); }; /* stay：确定后窗口随即关闭，对话框留着不收，免得先露一帧游戏画面 */ scrim.onclick = e => { if (e.target === scrim) close(); };
   document.addEventListener('keydown', onKey); vp.append(scrim); setCover('dialog', true); // 焦点落在对话框本体而不是按钮：按钮只有键盘 Tab 到它时才显示焦点环；Enter／Esc 由上面的 keydown 处理
@@ -437,26 +445,27 @@ function dialog(o: { title: string; body: string; cancel: string; ok: string; da
 
 // 扫码卡：与对话框同一张皮，居中（它不是决定，是等待）。阶段由宿主映射统一登录器的快照：loading／scan／confirm／exchanging／error；ready 由宿主直接收卡。
 // 没有按钮：取消＝点卡外或 Esc；刷新＝点码上的刷新标识。状态都画在码里（转圈／已扫码／刷新），卡的骨架不变。文案全部是草稿，等作者审定。
-type QrModel = { provider: string; stage: 'loading' | 'scan' | 'confirm' | 'exchanging' | 'error' | 'yield'; qr: string; text: string };
-let qrEl: HTMLElement | null = null; let qrCancelCb: (() => void) | null = null; let qrRetryCb: (() => void) | null = null; let qrTab: number | null = null; let qrYield = false;
-/* 卡片只属于一个标签：当前标签不是它的就藏起来（主进程切标签后会 render） */
-function syncCardTabs(w: Win) { if (qrEl) qrEl.hidden = qrYield || (qrTab !== null && qrTab !== w.cur); if (saveEl) saveEl.hidden = saveTab !== null && saveTab !== w.cur; }
-const QR_APP: Record<string, string> = { 'WeGame - QQ': 'QQ', 'WeGame - 微信': '微信', 'bilibili 扫码登录': '哔哩哔哩', 'Steam 扫码登录': 'Steam', 'OPPO 扫码登录': 'OPPO', '小米扫码登录': '小米', 'VIVO 扫码登录': 'VIVO', '华为扫码登录': '华为', '荣耀扫码登录': '荣耀' };
-function qrTexts(m: QrModel): [string, string] {
-  const app = QR_APP[m.provider] || m.provider.replace(/ ?扫码登录$/, '');
-  const sp = /^[A-Za-z]/.test(app) ? ` ${app} ` : app;
-  if (m.stage === 'loading') return ['正在获取二维码', ''];
-  if (m.stage === 'scan') return [`用手机${sp}扫码`, '扫码后在手机上确认登录'];
-  if (m.stage === 'confirm') return ['已扫码', '请在手机上确认登录'];
-  if (m.stage === 'exchanging') return ['正在登录', ''];
-  if (m.stage === 'error') return [m.text || '登录未完成', '点击二维码重新获取'];
-  return ['', ''];
+type QrModel = { provider: string; stage: 'loading' | 'retrying' | 'scan' | 'confirm' | 'verify' | 'exchanging' | 'entering' | 'error' | 'yield'; qr: string; text: string; code?: string; retry?: number };
+/* 每个标签一张卡（审计 C1：原来全窗一个单例，B 标签开卡会抹掉 A 的卡，A 的登录挂着却再也看不到）。键是标签 id；harness 不带 id 时用 null */
+type QrCard = { el: HTMLElement; tab: number | null; cancel: (() => void) | null; retry: (() => void) | null; yielded: boolean };
+const qrCards = new Map<number | null, QrCard>(); let qrClosing = 0;
+/* 覆盖只跟着「看得见的卡」走（审计 C5：原来卡对别的标签藏起来了，覆盖还挂着，透明的 chrome 盖满整窗，切到的标签点不动） */
+function qrCoverSync() { setCover('qr', qrClosing > 0 || [...qrCards.values()].some(c => !c.el.hidden)); }
+function syncCardTabs(w: Win) {
+  for (const c of qrCards.values()) c.el.hidden = c.yielded || (c.tab !== null && c.tab !== w.cur);
+  qrCoverSync();
+  if (saveEl) { saveEl.hidden = saveTab !== null && saveTab !== w.cur; setCover('save', !saveEl.hidden); }
 }
+const winOfTab = (tab: number | null) => wins.find(x => x.tabs.some(t => t.id === tab)) || wins[0];
+document.addEventListener('keydown', onQrKey);
+const { qrSteps } = qrCopy; /* 扫码卡文案与一行宽度预算在 qr-copy.ts，测试逐条量宽 */
+/* 出错重试（作者 10-21 定 C）：白码块本身变成按钮「重新获取二维码」，只有它能点；底行只写原因 */
 /* 私有二维码：各家给的码样式不一（中间带 logo、留白不同、尺寸不同），解出内容后用同一规格重画：
    纠错 M、4 模块留白、黑白、整数倍缩放不糊。解不出或内容含非 UTF-8 字节就原样用它的码。 */
 const qrCache = new Map<string, Promise<string>>();
 function normalizeQr(src: string): Promise<string> {
-  if (qrCache.has(src)) return qrCache.get(src)!;
+  const key = src;
+  if (qrCache.has(key)) return qrCache.get(key)!;
   const p = new Promise<string>(resolve => {
     const img = new Image();
     img.onload = () => {
@@ -466,7 +475,7 @@ function normalizeQr(src: string): Promise<string> {
         if (!r || !r.data) { resolve(src); return; }
         const utf8 = new TextEncoder().encode(r.data); if (utf8.length !== r.binaryData.length) { resolve(src); return; }
         const q = qrcodegen(0, 'M'); q.addData(r.data); q.make();
-        const n = q.getModuleCount(), quiet = 3, scale = Math.max(2, Math.floor(496 / (n + quiet * 2))); /* 留白 3 模块：框已经把码圈住，留白只需保证可扫 */
+        const n = q.getModuleCount(), quiet = 3, scale = Math.max(2, Math.floor(352 / (n + quiet * 2))); /* 留白 3 模块：框已经把码圈住，留白只需保证可扫 */
         const size = (n + quiet * 2) * scale; const o = document.createElement('canvas'); o.width = o.height = size; const og = o.getContext('2d')!;
         og.fillStyle = '#fff'; og.fillRect(0, 0, size, size); og.fillStyle = '#000';
         for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (q.isDark(y, x)) og.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
@@ -475,30 +484,70 @@ function normalizeQr(src: string): Promise<string> {
     };
     img.onerror = () => resolve(src); img.src = src;
   });
-  qrCache.set(src, p); return p;
+  qrCache.set(key, p); return p;
 }
-function closeQr() {
-  const el = qrEl; if (!el) return; qrEl = null; qrCancelCb = null; qrRetryCb = null; qrTab = null; el.classList.remove('in'); document.removeEventListener('keydown', onQrKey);
-  setTimeout(() => { el.remove(); if (!document.querySelector('.scrim')) setCover('dialog', false); }, 160);
+/* 卡头（平台名＋图标）跟着方式走：同一标签换方式时卡不重建，只更新，所以头也得在更新里换（作者 10-21：原来标题停在上一个方式，步骤却是新方式） */
+function qrHeader(el: HTMLElement, provider: string) {
+  if (el.dataset.provider === provider) return; el.dataset.provider = provider;
+  q(el, 'h3').textContent = provider.replace(/ ?扫码登录$/, '').replace(' - ', ' · ');
+  const bi = q(el, '.bi') as unknown as HTMLImageElement; const icon = BRAND_ICON[provider];
+  if (icon) { bi.src = icon; bi.hidden = false; } else { bi.removeAttribute('src'); bi.hidden = true; }
 }
-function onQrKey(e: KeyboardEvent) { if (e.key === 'Escape') { const cb = qrCancelCb; closeQr(); cb?.(); } }
-function updateQr(m: QrModel) {
-  const el = qrEl; if (!el) return;
-  qrYield = m.stage === 'yield'; const w0 = wins.find(x => x.tabs.some(t => t.id === qrTab)) || wins[0]; if (w0) syncCardTabs(w0); if (qrYield) return; /* 页面里的滑块／身份核验阶段让开 */
-  const img = q(el, '.qrbox img') as unknown as HTMLImageElement; const box = q(el, '.qrbox');
-  if (m.qr) { if (img.dataset.src !== m.qr) { img.dataset.src = m.qr; img.src = m.qr; normalizeQr(m.qr).then(u => { if (img.dataset.src === m.qr) img.src = u; }); } img.hidden = false; } else { img.hidden = true; img.removeAttribute('src'); delete img.dataset.src; }
-  const [t1, t2] = qrTexts(m); q(el, '.qst').textContent = t1; q(el, '.qsub').textContent = t2; (q(el, '.dlg') as HTMLElement).dataset.stage = m.stage; box.classList.toggle('act', m.stage === 'error');
+/* 只关这个标签的卡；退场动画期间覆盖仍算着（qrClosing），动画完再放 */
+function closeQr(tabId?: number) {
+  const key = tabId ?? null; const card = qrCards.get(key); if (!card) return; qrCards.delete(key);
+  const el = card.el; el.classList.add('closing'); el.classList.remove('in'); qrClosing += 1;
+  setTimeout(() => { el.remove(); qrClosing -= 1; qrCoverSync(); }, 240);
+}
+/* Esc 只对看得见的那张卡；上面压着对话框时 Esc 归对话框 */
+function onQrKey(e: KeyboardEvent) {
+  if (e.key !== 'Escape' || document.querySelector('.scrim:not(.qr-scrim)')) return;
+  const card = [...qrCards.values()].find(c => !c.el.hidden); if (!card) return;
+  const cb = card.cancel; closeQr(card.tab ?? undefined); cb?.();
+}
+function updateQr(m: QrModel, tabId?: number) {
+  const card = qrCards.get(tabId ?? null); if (!card) return; const el = card.el;
+  /* 页面里的滑块／身份核验阶段让开：卡藏起来，覆盖随之撤掉，否则盖满的 chrome 把页面里的验证件全吞掉（OPPO／VIVO 卡在这一步） */
+  card.yielded = m.stage === 'yield'; syncCardTabs(winOfTab(card.tab));
+  if (card.yielded) return;
+  qrHeader(el, m.provider);
+  const live = () => qrCards.get(card.tab) === card;
+  const img = q(el, '.qrbox img') as unknown as HTMLImageElement;
+  const qrbox = img.parentElement!;
+  if (m.qr && img.dataset.src !== m.qr) {
+    // 换码立即撤下旧内容；新图就绪后才淡入，异步结果仍校验归属。
+    qrbox.classList.remove('has-qr'); img.hidden = true; img.removeAttribute('src'); img.dataset.src = m.qr;
+    normalizeQr(m.qr).then(u => {
+      if (!live() || img.dataset.src !== m.qr) return;
+      img.onload = () => {
+        if (!live() || img.dataset.src !== m.qr) return;
+        img.hidden = false;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (live() && img.dataset.src === m.qr) qrbox.classList.add('has-qr');
+        }));
+      };
+      img.src = u;
+    });
+  } else if (!m.qr && img.dataset.src) {
+    delete img.dataset.src; qrbox.classList.remove('has-qr');
+    // 只让当前码完成退场；取消、换码后晚到的清理不能删掉新图。
+    setTimeout(() => { if (!img.dataset.src) { img.hidden = true; img.removeAttribute('src'); } }, 240);
+  }
+  const sm = qrSteps(m); const lis = el.querySelectorAll('.steps li'); sm.steps.forEach((t, i) => { const li = lis[i] as HTMLElement; const span = li.querySelector('span') as HTMLElement, mark = li.querySelector('i') as HTMLElement; if (li.className !== sm.state[i]) li.className = sm.state[i]; if (span.textContent !== t) span.textContent = t; const markHtml = sm.state[i] === 'done' ? S.check : sm.state[i] === 'busy' ? '' : String(i + 1); if (mark.dataset.v !== markHtml) { mark.dataset.v = markHtml; mark.innerHTML = markHtml; } }); /* 只在变化时改 DOM：原来每次更新都重写文字和字重，整列重排一次 */
+  const footText = sm.foot;
+  const foot = q(el, '.qst'); if (foot.textContent !== footText) { foot.getAnimations().forEach(a => a.cancel()); foot.textContent = footText; if (footText) foot.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 220, easing: 'ease-out' }); } (q(el, '.dlg') as HTMLElement).dataset.stage = m.stage;
 }
 function qrPrompt(m: QrModel, onCancel?: () => void, onRetry?: () => void, tabId?: number) {
-  const vp = document.querySelector('.win #viewport') as HTMLElement; closeQr(); vp.querySelector('.scrim')?.remove(); qrTab = tabId ?? null; qrYield = false;
-  const scrim = document.createElement('div'); scrim.className = 'scrim center'; scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><div class="qrbox"><img alt="" hidden><div class="ov"><i class="spin"></i><i class="ok">${S.check}</i><i class="again">${S.refresh || S.update || ''}</i></div></div><div class="qst"></div><div class="qsub"></div></div>`;
-  q(scrim, 'h3').textContent = m.provider.replace(/ ?扫码登录$/, '').replace(' - ', ' · ');
-  const bi = q(scrim, '.bi') as unknown as HTMLImageElement; const icon = BRAND_ICON[m.provider]; if (icon) { bi.src = icon; bi.hidden = false; }
-  const cancel = () => { const cb = qrCancelCb; closeQr(); cb?.(); };
-  (q(scrim, '.qrbox') as HTMLElement).onclick = () => { if ((q(scrim, '.dlg') as HTMLElement).dataset.stage === 'error') qrRetryCb?.(); };
+  const vp = document.querySelector('.win #viewport') as HTMLElement; const key = tabId ?? null;
+  const old = qrCards.get(key); if (old) { qrCards.delete(key); old.el.remove(); } /* 同一标签重开：直接换掉；别的标签的卡、对话框都不碰 */
+  const scrim = document.createElement('div'); scrim.className = 'scrim center qr-scrim'; scrim.innerHTML = `<div class="dlg qr" role="dialog"><div class="side"><div class="hd"><img class="bi" alt="" hidden><h3></h3></div><ol class="steps"><li><i></i><span></span></li><li><i></i><span></span></li><li><i></i><span></span></li></ol><div class="qst"></div></div><div class="stage"><div class="qrbox"><img alt="" hidden></div><div class="ov"><i class="spin"></i><span class="dots" aria-hidden="true"><b></b><b></b><b></b></span><i class="ok">${S.check}</i></div><div class="retry"><button class="rb" type="button">${S.refresh || S.update || ''}<span></span></button></div></div></div>`;
+  const card: QrCard = { el: scrim, tab: key, cancel: onCancel || null, retry: onRetry || null, yielded: false };
+  const cancel = () => { const cb = card.cancel; closeQr(tabId); cb?.(); };
+  (q(scrim, '.rb span') as HTMLElement).textContent = qrCopy.RETRY_ACTION;
+  (q(scrim, '.rb') as HTMLElement).onclick = e => { e.stopPropagation(); if ((q(scrim, '.dlg') as HTMLElement).dataset.stage === 'error') card.retry?.(); };
   scrim.onclick = e => { if (e.target === scrim) cancel(); };
-  qrEl = scrim; qrCancelCb = onCancel || null; qrRetryCb = onRetry || null; vp.append(scrim); setCover('dialog', true); document.addEventListener('keydown', onQrKey);
-  updateQr(m); const dlgEl = q(scrim, '.dlg') as HTMLElement; dlgEl.tabIndex = -1; requestAnimationFrame(() => { scrim.classList.add('in'); dlgEl.focus(); });
+  qrCards.set(key, card); vp.insertBefore(scrim, vp.querySelector('.scrim:not(.qr-scrim)')); /* 对话框永远压在卡上面 */
+  updateQr(m, tabId); const dlgEl = q(scrim, '.dlg') as HTMLElement; dlgEl.tabIndex = -1; requestAnimationFrame(() => { scrim.classList.add('in'); dlgEl.focus(); });
 }
 function confirmCloseWindow(n: number, onClose: () => void) { dialog({ title: '关闭窗口？', body: `有 ${n} 个标签页正在打开。`, check: '不再提示', cancel: '取消', ok: '关闭窗口', stay: Boolean(host.window), onOk: checked => { if (checked) { settings.confirmClose = false; host.settings?.set('confirmClose', false); } onClose(); } }); } // 「不再提示」＝关掉设置里的「关闭窗口前确认」
 function confirmLogoutAll() { dialog({ title: '退出所有账号？', body: '所有标签页将返回登录页。保存的账号不会被删除。', cancel: '取消', ok: '退出所有账号', onOk: () => { Promise.resolve(host.settings?.logoutAll()).then(() => toast('已退出所有账号'), (e: any) => toast(`退出失败：${e?.message || e}`)); } }); }
@@ -680,8 +729,15 @@ function renderAbout(pg: HTMLElement) {
     for (const w of wins) { const t = curTab(w); if (t && t.kind !== 'game') renderPage(w, t); }
     if (kind === 'closed') for (const w of wins) render(w); /* 「最近关闭」有无决定标签列表按钮在不在，标签条要跟着重画 */
   }
-  function setWindow(state: { maximized?: boolean; focused?: boolean }) {
-    for (const w of wins) { const el = winEl(w); if (state.maximized !== undefined) { const mx = q(el, '.caption .mx'); mx.innerHTML = state.maximized ? S.restore : S.max; mx.dataset.tip = state.maximized ? '向下还原' : '最大化'; } }
+  /* 窗口状态：最大化／全屏决定右上第二个键的图标与提示；全屏时它是「退出全屏」（Windows），全屏样式由 body.full 带（外框撤掉；macOS 撤红绿灯让位） */
+  const winState = { maximized: false, fullscreen: false };
+  function setWindow(state: { maximized?: boolean; focused?: boolean; fullscreen?: boolean }) {
+    if (state.maximized !== undefined) winState.maximized = Boolean(state.maximized);
+    if (state.fullscreen !== undefined) { winState.fullscreen = Boolean(state.fullscreen); document.body.classList.toggle('full', winState.fullscreen); }
+    if (state.maximized !== undefined || state.fullscreen !== undefined) for (const w of wins) {
+      const mx = q(winEl(w), '.caption .mx'); const restore = winState.fullscreen || winState.maximized;
+      mx.innerHTML = restore ? S.restore : S.max; mx.dataset.tip = winState.fullscreen ? '退出全屏' : winState.maximized ? '向下还原' : '最大化';
+    }
     if (state.focused !== undefined) document.body.classList.toggle('inactive', !state.focused);
   }
   function setSize(width: number, height: number) { for (const w of wins) { const el = winEl(w); el.style.width = width + 'px'; el.style.height = height + 'px'; } renderAll(); }

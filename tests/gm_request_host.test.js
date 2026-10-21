@@ -111,3 +111,13 @@ assert(cookie.expirationDate > Date.now() / 1000);
   console.error(error);
   process.exit(1);
 });
+
+// PR #1（heqinjian）：头值含控制字节时直接报出码点，不再伪装成网络失败
+{
+  const { createGmRequestHost } = require('../core/gm-request-host');
+  const host = createGmRequestHost({ log: () => {} });
+  host.request('bad-header', { url: 'https://web.sanguosha.com/x', headers: { 'x-euler-const': 'abc\u0014def' } }, { allowHosts: [], session: null }).then(r => {
+    assert.equal(r.kind, 'error'); assert(/U\+14/.test(r.error), 'bad header reported with code point: ' + r.error);
+    console.log('gm request host: bad header value reported');
+  });
+}

@@ -59,7 +59,105 @@ function createShellUpdateHost(options) {
   const restored = readPending();
   if (restored) publish({ phase: "ready", progress: 100, version: restored.version });
   else clearPending();
+  const electronNet = options.net && typeof options.net.request === "function" ? options.net : null;
+  function fetchToFileNet(url, target, expectedBytes) {
+    return new Promise((resolve, reject) => {
+      let hops = 0, done = false;
+      const finish = (cb, v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        cb(v);
+      };
+      const request = electronNet.request({ url, method: "GET", redirect: "manual", useSessionCookies: false });
+      request.setHeader("User-Agent", "Jinnangdai-MicroClient/1.4");
+      const timer = setTimeout(() => {
+        finish(reject, new Error("请求超时"));
+        try {
+          request.abort();
+        } catch (_) {
+        }
+      }, 6e4);
+      request.on("redirect", (status, _m, next) => {
+        hops += 1;
+        if (hops > MAX_REDIRECTS) {
+          finish(reject, new Error("重定向次数过多"));
+          try {
+            request.abort();
+          } catch (_) {
+          }
+          return;
+        }
+        if (!String(next).startsWith("https:")) {
+          finish(reject, new Error("重定向到非 HTTPS 地址"));
+          try {
+            request.abort();
+          } catch (_) {
+          }
+          return;
+        }
+        request.followRedirect();
+      });
+      request.on("response", (response) => {
+        const status = Number(response.statusCode || 0);
+        if (status !== 200) {
+          finish(reject, new Error(`HTTP ${status}`));
+          try {
+            request.abort();
+          } catch (_) {
+          }
+          return;
+        }
+        const file = fs.createWriteStream(`${target}.part`);
+        let received = 0, lastProgress = -1;
+        const fail = (error) => {
+          try {
+            fs.unlinkSync(`${target}.part`);
+          } catch (_) {
+          }
+          finish(reject, error);
+        };
+        response.on("data", (chunk) => {
+          received += chunk.length;
+          if (received > expectedBytes) {
+            try {
+              request.abort();
+            } catch (_) {
+            }
+            fail(new Error("文件超过清单字节数"));
+            return;
+          }
+          const progress = Math.min(99, Math.floor(received * 100 / expectedBytes));
+          if (progress !== lastProgress) {
+            lastProgress = progress;
+            publish({ progress });
+          }
+          file.write(chunk);
+        });
+        response.on("end", () => {
+          file.end(() => {
+            if (received !== expectedBytes) {
+              fail(new Error("下载不完整"));
+              return;
+            }
+            try {
+              fs.renameSync(`${target}.part`, target);
+              finish(resolve, received);
+            } catch (error) {
+              fail(error);
+            }
+          });
+        });
+        response.on("error", fail);
+        response.on("aborted", () => fail(new Error("连接中断")));
+        file.on("error", fail);
+      });
+      request.on("error", (error) => finish(reject, error));
+      request.end();
+    });
+  }
   function fetchToFile(url, target, expectedBytes, redirectCount = 0) {
+    if (electronNet) return fetchToFileNet(url, target, expectedBytes);
     if (redirectCount > MAX_REDIRECTS) return Promise.reject(new Error("重定向次数过多"));
     return new Promise((resolve, reject) => {
       const client = url.startsWith("https:") ? https : http;
@@ -202,6 +300,8 @@ function createShellUpdateHost(options) {
     }
   }
   return Object.freeze({
+    fetchToFile,
+    /* 诊断用：壳 asar 的下载通道可单独实测 */
     download,
     applyOnQuit,
     getState: () => ({ ...state }),

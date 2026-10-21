@@ -10,6 +10,9 @@ import zlib = require('zlib');
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 20000;
+// Xiaomi's QR endpoint holds one request for up to five minutes. Preserve
+// callers' bounded long-poll deadlines instead of cutting them off at 60 s.
+const MAX_TIMEOUT_MS = 315000;
 const ALWAYS_ALLOWED = ['sanguosha.com'];
 
 function hostAllowed(hostname, allowHosts) {
@@ -59,7 +62,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
   const log = typeof options.log === 'function' ? options.log : () => {};
   /* 壳里传 Electron 的 net：请求走 Chromium 网络层（跟随系统代理、用 Chromium 的 DNS 与证书库）。
      原来走 Node https 不吃系统代理，国内挂代理的用户 Steam 三个域名全部超时（2026-10-20 多名用户反馈）。测试里没有 Electron 就还走 Node。 */
-  const electronNet = options.net && typeof options.net.request === 'function' ? options.net : null;
+  const electronNet = options.net && typeof options.net.request === 'function' && process.env.JND_GM_NODE !== '1' ? options.net : null; /* JND_GM_NODE=1：排查用，强制走 Node */
   // 仅测试用：对本地自签名服务放宽 TLS；生产不传。
   const tlsOptions = options.tlsOptions && typeof options.tlsOptions === 'object' ? options.tlsOptions : {};
   const active = new Map();
@@ -88,7 +91,10 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
     return new Promise<{ response: any; body: Buffer }>((resolve, reject) => {
       let done = false;
       const finish = (fn: () => void) => { if (done) return; done = true; clearTimeout(timer); fn(); };
-      const req = electronNet.request({ method, url: url.href, session: session || undefined, useSessionCookies: false, redirect: 'manual' });
+      /* 传输用默认会话：标签会话上挂着壳的 webRequest 监听，主进程经它发请求会被拦成 ERR_BLOCKED_BY_CLIENT（2026-10-20 实机日志）；cookie 记账仍按调用方的会话 */
+      /* 跨源 Referer：Chromium 网络层会按默认 referrer 策略把这种请求整个拒掉（ERR_BLOCKED_BY_CLIENT，2026-10-20 实测），脚本模拟浏览器时又必须带它——指定 unsafe-url 让 referrer 原样带过去 */
+      const hasReferer = Object.keys(headers).some(k => k.toLowerCase() === 'referer');
+      void session; const req = electronNet.request({ method, url: url.href, useSessionCookies: false, redirect: 'manual', ...(hasReferer ? { referrerPolicy: 'unsafe-url' } : {}) });
       for (const [k, v] of Object.entries(headers)) { try { req.setHeader(k, String(v)); } catch (_) {} }
       const timer = setTimeout(() => { finish(() => reject(Object.assign(new Error('timeout'), { kind: 'timeout' }))); try { req.abort(); } catch (_) {} }, request.timeout);
       settle.cancel = reason => { finish(() => reject(reason)); try { req.abort(); } catch (_) {} };
@@ -156,7 +162,7 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
       method: String(input.method || 'GET').toUpperCase(),
       headers: {},
       data: input.data,
-      timeout: Math.max(1000, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, 60000)),
+      timeout: Math.max(1000, Math.min(Number(input.timeout) || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)),
       manualRedirect: input.redirect === 'manual',
       anonymous: Boolean(input.anonymous),
       explicitCookie: typeof input.cookie === 'string' ? input.cookie : null,
@@ -164,16 +170,11 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
     };
     for (const [key, value] of Object.entries(input.headers || {})) {
       if (typeof value !== 'string' || !/^[\w-]+$/.test(key)) continue;
-      // Node only accepts ISO-8859-1 header values. A value carrying control
-      // bytes or CJK text (the OPPO risk header x-euler-const is produced by a
-      // wasm SDK and occasionally picks up stray bytes) makes client.request()
-      // throw ERR_INVALID_CHAR synchronously — the request never leaves the
-      // process, yet it used to be reported as a network failure. Reject it here
-      // with the offending code points so the log says what actually happened.
+      // 头值只允许 ISO-8859-1 可打印字符（PR #1 by heqinjian）：OPPO 风控头 x-euler-const 由 wasm SDK 生成，偶尔混入控制字节，
+      // Node 的 http 层会同步抛 ERR_INVALID_CHAR、Chromium 也拒收，而上层把它当成网络失败。这里直接报出码点，日志才说得清。
       if (!/^[\t\x20-\x7E\x80-\xFF]*$/.test(value)) {
         const bad = [...new Set([...value].filter(ch => !/[\t\x20-\x7E\x80-\xFF]/.test(ch)))];
-        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8)
-          .map(ch => 'U+' + ch.codePointAt(0).toString(16).toUpperCase()).join(','));
+        throw new Error(`请求头 ${key} 含非法字符：` + bad.slice(0, 8).map(ch => 'U+' + ch.codePointAt(0)!.toString(16).toUpperCase()).join(','));
       }
       request.headers[key] = value;
     }
@@ -226,7 +227,8 @@ function createGmRequestHost(options: { log?: (...args: any[]) => void; tlsOptio
         return await perform(id, input, context);
       } catch (error) {
         const kind = error?.kind === 'timeout' ? 'timeout' : error?.kind === 'abort' ? 'abort' : 'error';
-        log('GM request failed', JSON.stringify({ id, kind, message: String(error?.message || error) }));
+        let u: any = null; try { u = new URL(String(input?.url || '')); } catch (_) {}
+        log('GM request failed', JSON.stringify({ id, kind, message: String(error?.message || error), host: u?.hostname, path: u?.pathname, method: input?.method || 'GET', headers: Object.keys(input?.headers || {}), binary: input?.responseType === 'arraybuffer', redirect: input?.redirect || 'follow', anonymous: Boolean(input?.anonymous), cookie: typeof input?.cookie === 'string' ? input.cookie.length : null, transport: electronNet ? 'net' : 'node' }));
         return { kind, status: 0, statusText: '', responseHeaders: '', finalUrl: String(input?.url || ''), error: String(error?.message || error) };
       }
     },

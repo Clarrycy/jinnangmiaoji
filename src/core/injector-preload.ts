@@ -3,7 +3,7 @@ const { ipcRenderer, webFrame } = electron_;
 import components_ = require('./components');
 const { COMPONENTS, parseUserScriptHeader } = components_;
 import entries_ = require('./entries');
-const { ENTRIES, matchesAnyEntry, TEST_ORIGIN } = entries_;
+const { ENTRIES, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 import gm_shim_ = require('./gm-shim');
 const { createGmShim, wrapWithGm } = gm_shim_;
 
@@ -166,7 +166,7 @@ export = function startInjector(config) {
     let records = {};
     try { records = ipcRenderer.sendSync('jnd-plugins-get-startup-sync') || {}; } catch (_) { return; }
     for (const record of Object.values<any>(records)) {
-      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href)) continue;
+      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href) || pluginMatches(record.exclude || [], location.href)) continue; /* @exclude 也生效 */
       injectedPlugins.add(record.id);
       const sourceName = `jnd-plugin-${record.id}-${record.version}.user.js`;
       try {
@@ -279,9 +279,14 @@ export = function startInjector(config) {
       html.style.zoom = String(zoom);
     };
     const schedule = () => { clearTimeout(timer); timer = setTimeout(fit, 80); };
+    /* 内容尺寸一变就重量（作者 10-21）：单页应用的门户（百度详情页）加载完时还是空壳，量出来「放得下」就锁了滚动，内容后长到 1692 也再不重量 */
+    const sizeWatch = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    const watchBody = () => { if (!document.body) return false; sizeWatch?.observe(document.body); return true; };
+    if (!watchBody()) document.addEventListener('DOMContentLoaded', watchBody, { once: true });
     // 游戏在本文档的 iframe 里开始加载后停止缩放并复位：Laya 画布不能被缩。
     ipcRenderer.on('jnd-landing-game-started', () => {
       stopped = true;
+      sizeWatch?.disconnect();
       window.removeEventListener('resize', schedule);
       clearTimeout(timer);
       document.documentElement.style.zoom = '';
@@ -299,42 +304,83 @@ export = function startInjector(config) {
     if (TEST_ORIGIN && url.origin === TEST_ORIGIN) return OFFICIAL_LOGIN_PATHS.includes(url.pathname);
     return url.origin === 'https://web.sanguosha.com' && OFFICIAL_LOGIN_PATHS.includes(url.pathname);
   }
+  // 落地页减法：按站点去广告位（规则在 entries.ts 的 LANDING_TRIM：官服下载条与适龄角标、4399 官网浮动广告）；document-start 就挂样式，不等页面画完再消失
+  { const css = landingTrimCss(location.hostname); const mount = () => { if (!css) return true; try { if (!document.documentElement || document.getElementById('jnd-landing-trim')) return false; const st = document.createElement('style'); st.id = 'jnd-landing-trim'; st.textContent = css; document.documentElement.append(st); return true; } catch (_) { return false; } }; if (!mount()) { const mo = new MutationObserver(() => { if (mount()) mo.disconnect(); }); mo.observe(document, { childList: true, subtree: true }); } } /* preload 跑在 <html> 之前，直接 append 会静默失败，原来等于到页面加载完才由主进程补 */
   // 落地页登录态：官方页登录后画「昵称／退出登录／进入游戏」面板（#nickName／#logoutBtn）；官服账号这里有昵称，渠道账号没有。
-  // 变化就报给壳：已登录＋昵称＋这次用的第三方方式（来自统一登录器的快照），回到登录表单＝退出。
+  // 只报「已登录＋昵称」，回到登录表单＝退出。登录方式不由这里报：它只由点选方式与扫码 ready 写（审计 C7：原来这里记住上次点过的方式、
+  // 永远不清，取消扫码后改用官方账号登录，档案会被写成那个第三方方式）。
   function installLandingWatcher() {
-    let last = '', lastProvider = null, attached = false;
-    const attachProvider = () => { const bridge = window.__JND_UNIFIED_LOGIN; if (!bridge || attached) return; attached = true; try { bridge.subscribe(state => { if (state?.provider) lastProvider = String(state.provider); }); } catch (_) {} };
+    let last = '';
     const tick = () => {
-      attachProvider();
       const loggedIn = Boolean(document.getElementById('logoutBtn'));
       const nickname = loggedIn ? String(document.getElementById('nickName')?.textContent || '').trim() : '';
       const form = Boolean(document.getElementById('SGS_login-account'));
       if (!loggedIn && !form) return; // 页面还没画完
-      const key = `${loggedIn ? 1 : 0}:${nickname}:${lastProvider || ''}`; if (key === last) return; last = key;
-      try { ipcRenderer.send('jnd-landing-state', { loggedIn, nickname, provider: lastProvider }); } catch (_) {}
+      const key = `${loggedIn ? 1 : 0}:${nickname}`; if (key === last) return; last = key;
+      try { ipcRenderer.send('jnd-landing-state', { loggedIn, nickname }); } catch (_) {}
     };
     setInterval(tick, 500);
   }
   function installLoginBridge() {
+    type LoginRequest = { provider: string; requestId: number };
     let unsubscribe = null;
-    let pending = null;
+    let pending: LoginRequest | null = null, current: LoginRequest | null = null;
+    let draining = false, accepting = false, revision = 0;
+    const forward = state => {
+      if (!accepting || !current || (state.provider && state.provider !== current.provider)) return;
+      try { ipcRenderer.send('jnd-login-state', { ...state, requestId: current.requestId, requestProvider: current.provider }); } catch (_) {}
+    };
+    const drain = async () => {
+      const bridge = window.__JND_UNIFIED_LOGIN;
+      if (draining || !bridge || !pending) return;
+      draining = true;
+      try {
+        while (pending) {
+          const request = pending, ownRevision = revision; pending = null;
+          accepting = false;
+          bridge.cancel();
+          // cancel 会中止请求；旧 start 的 finally 释放 busy 后才能换渠道。
+          while (bridge.get().busy && ownRevision === revision) await new Promise(resolve => setTimeout(resolve, 100));
+          if (ownRevision !== revision) continue;
+          current = request; accepting = true;
+          try { await bridge.start(request.provider); }
+          catch (error) {
+            if (ownRevision === revision) forward({ provider: request.provider, stage: '', qr: '', text: '', error: { code: 'LOGIN_START_FAILED' } });
+            report('warn', `统一登录器发起失败：${error?.message || error}`);
+          }
+        }
+      } finally { draining = false; }
+    };
     const attach = () => {
       const bridge = window.__JND_UNIFIED_LOGIN;
       if (!bridge || unsubscribe) return Boolean(bridge);
-      unsubscribe = bridge.subscribe(state => { try { ipcRenderer.send('jnd-login-state', state); } catch (_) {} });
-      /* 订阅只在二维码变化时通知；「已扫码待确认」这种阶段变化靠轮询快照拿 */
-      let last = ''; setInterval(() => { try { const s = bridge.get(); const key = `${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ''}`; if (key !== last) { last = key; ipcRenderer.send('jnd-login-state', s); } } catch (_) {} }, 400);
-      if (pending) { const provider = pending; pending = null; void bridge.start(provider).catch(error => report('warn', `统一登录器发起失败：${error?.message || error}`)); }
+      unsubscribe = bridge.subscribe(forward);
+      ipcRenderer.send('jnd-login-bridge-ready');
+      /* 订阅只在二维码变化时通知；阶段变化同时靠轮询快照拿。 */
+      let last = '';
+      setInterval(() => {
+        try {
+          if (!accepting || !current) return;
+          const s = bridge.get(); const key = `${current.requestId}|${s.provider}|${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ''}`;
+          if (key !== last) { last = key; forward(s); }
+        } catch (_) {}
+      }, 400);
       return true;
     };
-    ipcRenderer.on('jnd-login-start', (_event, provider) => {
-      if (attach()) void window.__JND_UNIFIED_LOGIN.start(String(provider)).catch(error => report('warn', `统一登录器发起失败：${error?.message || error}`));
-      else pending = String(provider);
+    ipcRenderer.on('jnd-login-start', (_event, request) => {
+      if (!request || typeof request.provider !== 'string' || !Number.isSafeInteger(request.requestId)) return;
+      revision += 1; accepting = false; pending = { provider: request.provider, requestId: request.requestId };
+      // 先关消息入口再取消，取消过程中的旧快照也不能贴到新标题下。
+      try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
+      if (attach()) void drain();
     });
-    ipcRenderer.on('jnd-login-cancel', () => { pending = null; try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {} });
+    ipcRenderer.on('jnd-login-cancel', () => {
+      revision += 1; pending = null; accepting = false; current = null;
+      try { window.__JND_UNIFIED_LOGIN?.cancel(); } catch (_) {}
+    });
     // 脚本在 DOMContentLoaded 挂载；轮询到桥出现为止（最多 20 秒）。
     let tries = 0;
-    const timer = setInterval(() => { tries += 1; if (attach() || tries > 80) clearInterval(timer); }, 250);
+    const timer = setInterval(() => { tries += 1; if (attach()) { clearInterval(timer); void drain(); } else if (tries > 80) { clearInterval(timer); report('warn', '统一登录器 20 秒内没有挂载，扫码无法发起'); } }, 250);
   }
 
   // 账号簿：官方「游卡通行证」表单（sgslogin-sdk：#SGS_login-account／#SGS_login-password／#SGS_login-btn）。

@@ -10,6 +10,8 @@ const FRAME = Object.freeze({ side: 3, bottom: 3, top: 0, radius: 6 });
 const BAR_COLOR = "#f3f3f3";
 const BAR_SYMBOL = "#1b1b1f";
 const CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+const MAC_LIGHTS = Object.freeze({ x: 12, y: 10 });
+const MAC_INSET = MAC_LIGHTS.x + 52 + 12 - 6;
 function baseCss() {
   return `
     :root { --frame:${BAR_COLOR}; --line:#e1e1e3; --ink:#1b1b1f; --ink-2:#5c5c63; --ink-3:#8e8e95; --ink-dim:#9a9aa0; --hover:rgba(0,0,0,.05); --accent:#0067c0; --accent-2:#1976d2; }
@@ -26,7 +28,7 @@ function frameDocument(title) {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}"><title>${escapeHtml(title)}</title><style>${baseCss()}
     #viewport { background: transparent; }</style></head><body><div id="viewport"></div></body></html>`;
 }
-function chromeDocument(title, iconPath) {
+function chromeDocument(title, iconPath, platform = "") {
   const icon = `data:image/png;base64,${fs.readFileSync(iconPath).toString("base64")}`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}"><title>${escapeHtml(title)}</title><style>${baseCss()}
     ${chromeCss(TOKENS, SPEC)}
@@ -39,14 +41,22 @@ function chromeDocument(title, iconPath) {
     #viewport.page { background: #fff; }
     .game { position: absolute; inset: 0; background: transparent; } .game[hidden] { display: none; } .game .ph { display: none; }
     .ib, .tab, .caption span, .menu, .amenu, .tlmenu, .pg, .scrim, .toasts, .tip { -webkit-app-region: no-drag; }
-    </style></head><body data-icon="${icon}"></body></html>`;
+    /* macOS：左边让给系统红绿灯，右上只留汉堡菜单并贴右；全屏时红绿灯收起，让位撤掉 */
+    body.mac .win > header { padding-left: ${MAC_INSET}px; }
+    body.mac .caption .mn, body.mac .caption .mx, body.mac .caption .cx { display: none; }
+    body.mac .caption { padding-right: 4px; } body.mac .amenu { right: 6px; }
+    body.mac.full .win > header { padding-left: 0; }
+    /* 全屏（两个平台）：标题栏保留，游戏区四周外框去掉、铺满 */
+    body.full #viewport { left: 0; right: 0; bottom: 0; border: 0; border-radius: 0; }
+    </style></head><body data-icon="${icon}"${platform === "darwin" ? ' class="mac"' : ""}></body></html>`;
 }
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 }
-function viewportBounds(contentWidth, contentHeight) {
+function viewportBounds(contentWidth, contentHeight, fullscreen = false) {
+  if (fullscreen) return { x: 0, y: TITLE_HEIGHT, width: Math.max(0, contentWidth), height: Math.max(0, contentHeight - TITLE_HEIGHT) };
   const x = FRAME.side + 1;
   const y = TITLE_HEIGHT + FRAME.top + 1;
   return { x, y, width: Math.max(0, contentWidth - x - FRAME.side - 1), height: Math.max(0, contentHeight - y - FRAME.bottom - 1) };
 }
-module.exports = { TITLE_HEIGHT, FRAME, BAR_COLOR, BAR_SYMBOL, CSP, baseCss, frameDocument, chromeDocument, viewportBounds };
+module.exports = { TITLE_HEIGHT, FRAME, BAR_COLOR, BAR_SYMBOL, CSP, MAC_LIGHTS, MAC_INSET, baseCss, frameDocument, chromeDocument, viewportBounds };

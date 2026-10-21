@@ -10,7 +10,7 @@ const accounts = [
   { entry: '官服', nick: '范例玩家甲', uid: '10000001', account: 'demo_user_01', password: 'demo-password-01', via: '账号密码', last: '今天 14:02' },
   { entry: '官服', nick: '范例玩家乙七个字', uid: '10000002', account: '13800000000', password: 'demo-password-02', via: '账号密码', last: '昨天' },
   { entry: '4399', nick: '小号二', uid: '77120011', account: '', password: '', via: '渠道登录', last: '3 天前' },
-  { entry: '哔哩哔哩', nick: '范例玩家丙', uid: '10000003', account: '', password: '', via: 'bilibili 扫码', last: '10 月 9 日' },
+  { entry: 'bilibili', nick: '范例玩家丙', uid: '10000003', account: '', password: '', via: 'bilibili 扫码', last: '10 月 9 日' },
 ];const plugins = [
   // 小抄的更新地址来自它 @namespace 指向的 Greasy Fork 脚本页（dist 头部没写 @updateURL，按 Greasy Fork 约定拼）
   { id: 'daxiaochao', name: '三国杀打小抄一将成名', version: '1.19.5', source: 'https://greasyfork.org/scripts/448004', updateUrl: 'https://greasyfork.org/scripts/448004/code/daxiaochao.user.js', date: '10 月 12 日', enabled: true },

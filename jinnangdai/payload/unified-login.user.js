@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         统一登录器
 // @namespace    jinnangdai.wegame.standalone
-// @version      1.0.0
+// @version      1.0.4
 // @match        https://web.sanguosha.com/login/index.html*
 // @match        https://web.sanguosha.com/10/pc/index.php*
 // @match        https://web.sanguosha.com/10/pc/bilibiliWD_index.php*
@@ -72,7 +72,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.4';
   const ORIGIN = 'https://web.sanguosha.com';
   const SESSION_KEY = 'wegame.qq.session.v1';
   const HANDOFF_KEY = 'wegame.qq.handoff.v1';
@@ -974,10 +974,11 @@
     console.info('[统一登录器]', JSON.stringify(entry)); // No bodies, query strings, cookies or credentials.
   }
   function requestDiagnostic(a, stage, url, method, mode) {
-    if (a.provider !== 'honor') return () => {};
+    if (!['honor', 'xiaomi'].includes(a.provider)) return () => {};
     const u = new URL(url), started = performance.now(), previous = a.lastResponse;
     let ended = false;
     const base = {stage, method, endpoint: u.origin + u.pathname, mode,
+      cookieCount: a.cookies.forURL(url).length,
       ...(previous ? {lastResponse: previous} : {})};
     const update = (event, response, error) => {
       if (attempt !== a || disposed || ended) return;
@@ -990,8 +991,13 @@
         const target = responseHeader(response.responseHeaders, 'location');
         detail.hasLocation = !!target;
         if (target) {
-          try { detail.locationScheme = new URL(target, url).protocol; } catch (_) {}
+          try {
+            const next = new URL(target, url);
+            detail.locationScheme = next.protocol;
+            detail.locationEndpoint = next.origin + next.pathname;
+          } catch (_) {}
         }
+        detail.setCookieCount = (String(response.responseHeaders || '').match(/^set-cookie:/gim) || []).length;
         detail.responseLength = typeof response.responseText === 'string' ? response.responseText.length : 0;
       }
       // Browser errors can embed full URLs. Retain their diagnostic identifiers
@@ -1006,8 +1012,8 @@
       if (error && /^[A-Z][A-Z_0-9-]*$/.test(error.message)) detail.error = error.message;
       a.requestDiagnostic = detail;
       if (event !== 'request') a.lastResponse = {stage, event, status: detail.status ?? 0};
-      if (error) error.requestDiagnostic = detail;
-      if (ui?.output) ui.output.textContent = JSON.stringify({version: VERSION, ...detail}, null, 2);
+      if (error && a.provider === 'honor') error.requestDiagnostic = detail;
+      if (a.provider === 'honor' && ui?.output) ui.output.textContent = JSON.stringify({version: VERSION, ...detail}, null, 2);
       console.info('[统一登录器]', JSON.stringify({version: VERSION, ...detail}));
     };
     update('request');
@@ -1165,6 +1171,7 @@
     a.stage = 'waiting_scan';
   }
   async function waitForQQ(a) {
+    prefetchEntryArtwork(a);
     while (!a.redirect) {
       active(a);
       a.stage = 'qq_poll';
@@ -1182,7 +1189,7 @@
       if (code === 0) { a.redirect = args[2]; a.expires = Date.now() + 600000; return; }
       assert(code === 66 || code === 67, code === 65 ? 'QQ_QR_EXPIRED' : 'QQ_REJECTED_' + code, a.stage);
       a.stage = code === 67 ? 'waiting_confirmation' : 'waiting_scan';
-      await sleep(3100);
+      await sleep(code === 67 ? 1000 : 3100);
     }
   }
   // Tencent app QR page verified 2026-09-21 with the APK's AppID/package.
@@ -1239,6 +1246,7 @@
     a.stage = 'waiting_scan';
   }
   async function waitForWX(a) {
+    prefetchEntryArtwork(a);
     while (!a.wxCode) {
       active(a); a.stage = 'wx_poll';
       let r;
@@ -2403,6 +2411,7 @@
     renderSteamQR(a);
   }
   async function waitForSteam(a) {
+    prefetchEntryArtwork(a);
     while (!a.steamWeb) {
       await sleep(Math.max(1000, Number(a.steamChallenge.interval) * 1000)); active(a);
       const r = await steamAPI(a, 'PollAuthSessionStatus',
@@ -2539,6 +2548,7 @@
     a.stage = 'waiting_scan';
   }
   async function waitForBili(a) {
+    prefetchEntryArtwork(a);
     while (!a.bili) {
       active(a);
       let r;
@@ -2560,7 +2570,7 @@
       assert(r.code === 122022 || r.code === 122024,
         r.code === 122023 ? 'BILI_QR_EXPIRED' : 'OFFICIAL_REJECTED_' + r.code, 'bili_poll');
       a.stage = r.code === 122024 ? 'waiting_confirmation' : 'waiting_scan';
-      await sleep(2000);
+      await sleep(r.code === 122024 ? 1000 : 2000);
     }
   }
   async function exchangeBili(a) {
@@ -2695,12 +2705,9 @@
     // page, then run its 'identify' channel handshake — the iframe broadcasts
     // "identify$$channel_loaded$$", we answer "identify$$message_channel_port_passed$$"
     // with a MessageChannel port; result arrives as {type:'validate_success',ticket}.
-    active(a); a.stage = 'oppo_identify';
-    // The shell draws its own QR card above the page and only yields it while the
-    // projected stage matches /captcha|identify/. That projection is pushed on
-    // page mutations, and this widget changes neither the QR image nor the status
-    // text — so without this explicit nudge the card keeps covering the iframe and
-    // the user waits out the full timeout. Same for oppoCaptcha below.
+    active(a); a.stage = 'oppo_verify_prepare';
+    // Keep the current verification card visible until the official engine
+    // announces its channel. Merely starting the iframe is not UI readiness.
     page.__JND_UNIFIED_LOGIN?.notify?.();
     const url = OPPO_ID_ORIGIN + '/identify-engine-web?sceneId=' + OPPO_SCENE +
       '&bizAppKey=' + OPPO_BIZ + '&region=CN&processToken=' + encodeURIComponent(processToken);
@@ -2741,7 +2748,7 @@
           console.info('[统一登录器]', JSON.stringify({stage: 'oppo_identify_msg', origin: e.origin,
             kind: typeof e.data === 'string' ? 'str' : 'obj:' + String(e.data && e.data.type),
             length: text.length, matched: text === CH_LOADED}));
-          if (e.origin !== OPPO_ID_ORIGIN) return;
+          if (e.origin !== OPPO_ID_ORIGIN || e.source !== frame.contentWindow) return;
           if (e.data && e.data.type) { deliver(e.data); return; }
           // Deployed identify-engine-web prefixes the channel name with its
           // delegator tag (ie-index.js vh class, 2026-09-22).
@@ -2754,6 +2761,11 @@
             };
             frame.contentWindow.postMessage('[MessageChannelDelegator-name]: identify$$message_channel_port_passed$$',
               OPPO_ID_ORIGIN, [channel.port2]);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              if (attempt !== a || a.stage !== 'oppo_verify_prepare' || !overlay.isConnected) return;
+              a.stage = 'oppo_identify';
+              page.__JND_UNIFIED_LOGIN?.notify?.();
+            }));
           }
         };
         window.addEventListener('message', onMsg);
@@ -2773,7 +2785,7 @@
     // Server demanded human verification (check code 101001). Show the
     // official slide widget and return captchaCode in the official wrapped
     // form: JSON {success, provider:'DINGXIANG', result: JSON{ret,ticket}}.
-    active(a); a.stage = 'oppo_captcha';
+    active(a); a.stage = 'oppo_verify_prepare';
     page.__JND_UNIFIED_LOGIN?.notify?.();
     if (!page._dx?.Captcha) {
       await new Promise((resolve, reject) => {
@@ -2814,7 +2826,14 @@
           success: done(resolve), fail() {/* 滑块内部允许重试,等待 success */}});
         if (captcha && typeof captcha.on === 'function') {
           captcha.on('loadFail', () => done(reject)(failure('OPPO_CAPTCHA_LOADFAIL', 'oppo_captcha')));
-          captcha.on('ready', () => console.info('[统一登录器]', JSON.stringify({stage: 'oppo_captcha', event: 'ready'})));
+          captcha.on('ready', () => {
+            console.info('[统一登录器]', JSON.stringify({stage: 'oppo_captcha', event: 'ready'}));
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              if (attempt !== a || a.stage !== 'oppo_verify_prepare' || !overlay.isConnected) return;
+              a.stage = 'oppo_captcha';
+              page.__JND_UNIFIED_LOGIN?.notify?.();
+            }));
+          });
         }
       });
       assert(ticket !== undefined && String(ticket).length <= 4096, 'OPPO_CAPTCHA_SCHEMA_CHANGED', 'oppo_captcha');
@@ -2853,7 +2872,12 @@
       const data = oppoData(await oppoEnvelope(a, 'oppo_poll', OPPO_ORIGIN + '/identity/v1/authn/scan-code/check-qrcode',
         {qid: a.oppoQid}), 'oppo_poll');
       const status = data.qrCodeStatus;
-      if (status === 'CONFIRMED') { a.oppoConfirmed = true; hideQR(a); return; }
+      if (status === 'CONFIRMED') {
+        // Confirmation done. Captcha (2 min) and identify (5 min) only start now,
+        // so the 180 s attempt budget from start() would expire mid-verification
+        // and the expiry watcher would clear the attempt under the open widget.
+        a.oppoConfirmed = true; a.expires = Date.now() + 600000; hideQR(a); return;
+      }
       assert(status === 'INITIAL' || status === 'SCANNED',
         status === 'CANCELED_LOGIN' || status === 'CANCELED_AUTHORIZE' ? 'OPPO_QR_CANCELED' : 'OPPO_QR_STATUS_' + status, 'oppo_poll');
       a.stage = status === 'SCANNED' ? 'waiting_confirmation' : 'waiting_scan';
@@ -3324,17 +3348,65 @@
       a.requests.add(cancel); observer.observe(document.documentElement, {childList: true, subtree: true});
     });
   }
-  async function showMiddle(a) {
-    active(a);
-    if (middle) return;
-    const result = success(await json(a, 'entry_config', 'https://web-login-api.sanguosha.com/v1_1/background/info'), 'entry_config');
+  async function fetchEntryArtwork(a) {
+    const stage = 'entry_config';
+    // Public artwork only. Keep the foreground scan stage unchanged.
+    const response = await transport(a, 'https://web-login-api.sanguosha.com/v1_1/background/info',
+      {stage, limit: 131072});
+    let value;
+    try { value = JSON.parse(response.responseText); } catch (_) { throw failure('INVALID_JSON', stage); }
+    assert(value && typeof value === 'object' && !Array.isArray(value), 'RESPONSE_SCHEMA_CHANGED', stage);
+    const result = success(value, stage);
     // Official /login/x/index uses MICRO_ENV_FLAG_10TH and only gameId 100.
     // 10th-client.0b24.js, checked 2026-09-21; SHA-256:
     // 8835472d253415c4e6b15c38083dd6a8e04737e11f13d76e685991cdc94ecc44.
     // Keep the official wide artwork and base 732px frame; do not stretch a
     // 273px tile from the three-entry page. Recheck config/DOM at runtime.
-    const image = fields(result.data?.['100client_game'], ['img', 'flag_img'], 'entry_config');
-    for (const value of Object.values(image)) parseURL(value, new Set(['wwwoss.sanguosha.com']), 'entry_config');
+    const image = fields(result.data?.['100client_game'], ['img', 'flag_img'], stage);
+    for (const value of Object.values(image)) parseURL(value, new Set(['wwwoss.sanguosha.com']), stage);
+    active(a);
+    return image;
+  }
+  function prefetchEntryImages(a, artwork) {
+    for (const url of new Set(Object.values(artwork))) {
+      active(a);
+      const image = new Image(), started = performance.now();
+      let settled = false;
+      const finish = code => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); a.requests.delete(cancel);
+        image.onload = image.onerror = null;
+        record('entry_image', started, 0, code);
+        if (code) image.removeAttribute('src');
+      };
+      const cancel = () => finish('REQUEST_CANCELLED');
+      const timer = setTimeout(() => finish('REQUEST_TIMEOUT'), 20000);
+      a.requests.add(cancel);
+      image.onload = () => finish();
+      image.onerror = () => finish('ENTRY_IMAGE_LOAD_FAILED');
+      // Same page and URLs as the final CSS backgrounds, so the browser can
+      // reuse its image cache. No extra DOM, substitute artwork or login delay.
+      image.src = url;
+    }
+  }
+  function prefetchEntryArtwork(a) {
+    // Scope to this attempt. Cancellation uses the same request registry.
+    // Consume speculative failures immediately; the required path retries once.
+    if (!a.entryArtwork) a.entryArtwork = fetchEntryArtwork(a).then(image => {
+      prefetchEntryImages(a, image);
+      return {image};
+    }).catch(() => ({image: null}));
+  }
+  async function entryArtwork(a) {
+    active(a); a.stage = 'entry_config';
+    const cached = a.entryArtwork ? await a.entryArtwork : null;
+    active(a);
+    return cached?.image || await fetchEntryArtwork(a);
+  }
+  async function showMiddle(a) {
+    active(a);
+    if (middle) return;
+    const image = await entryArtwork(a);
     // The official web nickname lookup accepts a CAS account name. There is
     // no verified pre-game UserID lookup for this channel; leave its slot empty.
     active(a);
@@ -3482,6 +3554,7 @@
     }
     busy = true; setProvidersBusy(true); ui.output.textContent = '';
     lifecycle('login.start', {provider});
+    let mine = null; // 这次 start 跑的尝试；被取消或被新尝试顶替后，它残留的异步链抛出的错不是当前的错
     try {
       if (!attempt || (attempt.provider || 'qq') !== provider || Date.now() >= attempt.expires || attempt.renewalFailed) {
         if (attempt?.renewalFailed && attempt.provider === provider) forget(attempt, 'RENEWAL_FAILED_RESCAN');
@@ -3492,7 +3565,7 @@
         if (provider === 'steam') restoreSteamCheckpoint(attempt);
       }
       if (!releaseLock) await acquireLock();
-      const a = attempt;
+      const a = attempt; mine = a;
       active(a);
       // Preserve completed exchange stages on an interrupted run. A used game
       // grant is never replayed, nor is an expired grant relabelled as fresh.
@@ -3502,6 +3575,9 @@
       if (!a.grant) restoreMiddle();
       await exchange(a); await showMiddle(a);
     } catch (error) {
+      // 取消、过期清理、换方式都会先 clearAttempt，旧链随后在 active() 里抛 ATTEMPT_EXPIRED；
+      // 那不是当前尝试的失败，不能记成错误（原来取消扫码后约 1.7 秒会冒出一个「尝试过期」）。真过期由 expiryTimer 自己报。
+      if (mine && attempt !== mine) return;
       invalidateOnError(attempt, error);
       hideQR(attempt); errorUI(error);
       if (!attempt?.redirect && !attempt?.qq && !attempt?.wxCode && !attempt?.wegame && !attempt?.bili && !attempt?.biliChallenge &&
@@ -3569,7 +3645,7 @@
     huawei.addEventListener('click', () => start('huawei'));
     honor.addEventListener('click', () => start('honor'));
     const expiryTimer = setInterval(() => {
-      if (attempt && Date.now() >= attempt.expires) { forget(attempt, 'ATTEMPT_EXPIRED'); restoreMiddle(); clearAttempt(); }
+      if (attempt && Date.now() >= attempt.expires) { errorUI(failure('ATTEMPT_EXPIRED', attempt.stage)); forget(attempt, 'ATTEMPT_EXPIRED'); restoreMiddle(); clearAttempt(); }
     }, 1000);
     window.addEventListener('pagehide', () => {
       disposed = true; clearInterval(expiryTimer); clearAttempt();
@@ -3583,7 +3659,7 @@
     if (page.__JND_HOST?.kind === 'micro') {
       host.style.display = 'none';
       const listeners = new Set();
-      let qrData = '', qrSource = '';
+      let qrData = '', qrSource = '', qrOwner = null;
       const ERROR_TEXT = {
         LOGIN_CANCELLED: '已取消', OTHER_TAB_ACTIVE: '另一个窗口正在登录，请先完成或关闭它',
         QR_EXPIRED: '二维码已过期，请重新发起', REQUEST_TIMEOUT: '连接超时，请重试', NETWORK_ERROR: '网络连接失败，请重试',
@@ -3607,16 +3683,18 @@
         return '正在获取二维码…';
       };
       const snapshot = () => ({busy, provider: attempt?.provider || null, stage: attempt?.stage || '',
-        qr: ui.screen.hidden ? '' : qrData, text: humanText(), error: microError ? {...microError} : null});
+        qr: ui.screen.hidden || qrOwner !== attempt ? '' : qrData, text: humanText(), error: microError ? {...microError} : null});
       const notify = () => { const s = snapshot(); for (const l of [...listeners]) { try { l(s); } catch (_) {} } };
       const refreshQr = async () => {
         const src = ui.screen.hidden ? '' : ui.screen.getAttribute('src') || '';
-        if (src === qrSource) { notify(); return; }
-        qrSource = src; qrData = '';
+        const owner = attempt;
+        if (src === qrSource && qrOwner === owner) { notify(); return; }
+        qrSource = src; qrOwner = owner; qrData = '';
+        let data = '';
         if (src) {
           try {
             // QR images are local blob:/data: URLs; a canvas copy avoids fetch, which the release gate forbids.
-            qrData = await new Promise(resolve => {
+            data = await new Promise(resolve => {
               const img = new Image();
               img.onload = () => {
                 try {
@@ -3627,9 +3705,12 @@
               img.onerror = () => resolve('');
               img.src = src;
             });
-          } catch (_) { qrData = ''; }
-          if (qrSource !== src) return;
+          } catch (_) { data = ''; }
         }
+        // 异步图片只允许提交给原任务，旧转换不能覆盖新二维码。
+        if (qrSource !== src || qrOwner !== owner || attempt !== owner
+          || (ui.screen.hidden ? '' : ui.screen.getAttribute('src') || '') !== src) return;
+        qrData = data;
         notify();
       };
       const observer = new MutationObserver(records => {

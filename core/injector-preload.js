@@ -4,7 +4,7 @@ const { ipcRenderer, webFrame } = electron_;
 const components_ = require("./components");
 const { COMPONENTS, parseUserScriptHeader } = components_;
 const entries_ = require("./entries");
-const { ENTRIES, matchesAnyEntry, TEST_ORIGIN } = entries_;
+const { ENTRIES, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 const gm_shim_ = require("./gm-shim");
 const { createGmShim, wrapWithGm } = gm_shim_;
 module.exports = function startInjector(config) {
@@ -205,7 +205,7 @@ ${record.code}
       return;
     }
     for (const record of Object.values(records)) {
-      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href)) continue;
+      if (!record?.code || injectedPlugins.has(record.id) || !pluginMatches(record.match, location.href) || pluginMatches(record.exclude || [], location.href)) continue;
       injectedPlugins.add(record.id);
       const sourceName = `jnd-plugin-${record.id}-${record.version}.user.js`;
       try {
@@ -329,8 +329,16 @@ ${record.code}
       clearTimeout(timer);
       timer = setTimeout(fit, 80);
     };
+    const sizeWatch = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    const watchBody = () => {
+      if (!document.body) return false;
+      sizeWatch?.observe(document.body);
+      return true;
+    };
+    if (!watchBody()) document.addEventListener("DOMContentLoaded", watchBody, { once: true });
     ipcRenderer.on("jnd-landing-game-started", () => {
       stopped = true;
+      sizeWatch?.disconnect();
       window.removeEventListener("resize", schedule);
       clearTimeout(timer);
       document.documentElement.style.zoom = "";
@@ -346,30 +354,40 @@ ${record.code}
     if (TEST_ORIGIN && url.origin === TEST_ORIGIN) return OFFICIAL_LOGIN_PATHS.includes(url.pathname);
     return url.origin === "https://web.sanguosha.com" && OFFICIAL_LOGIN_PATHS.includes(url.pathname);
   }
-  function installLandingWatcher() {
-    let last = "", lastProvider = null, attached = false;
-    const attachProvider = () => {
-      const bridge = window.__JND_UNIFIED_LOGIN;
-      if (!bridge || attached) return;
-      attached = true;
+  {
+    const css = landingTrimCss(location.hostname);
+    const mount = () => {
+      if (!css) return true;
       try {
-        bridge.subscribe((state) => {
-          if (state?.provider) lastProvider = String(state.provider);
-        });
+        if (!document.documentElement || document.getElementById("jnd-landing-trim")) return false;
+        const st = document.createElement("style");
+        st.id = "jnd-landing-trim";
+        st.textContent = css;
+        document.documentElement.append(st);
+        return true;
       } catch (_) {
+        return false;
       }
     };
+    if (!mount()) {
+      const mo = new MutationObserver(() => {
+        if (mount()) mo.disconnect();
+      });
+      mo.observe(document, { childList: true, subtree: true });
+    }
+  }
+  function installLandingWatcher() {
+    let last = "";
     const tick = () => {
-      attachProvider();
       const loggedIn = Boolean(document.getElementById("logoutBtn"));
       const nickname = loggedIn ? String(document.getElementById("nickName")?.textContent || "").trim() : "";
       const form = Boolean(document.getElementById("SGS_login-account"));
       if (!loggedIn && !form) return;
-      const key = `${loggedIn ? 1 : 0}:${nickname}:${lastProvider || ""}`;
+      const key = `${loggedIn ? 1 : 0}:${nickname}`;
       if (key === last) return;
       last = key;
       try {
-        ipcRenderer.send("jnd-landing-state", { loggedIn, nickname, provider: lastProvider });
+        ipcRenderer.send("jnd-landing-state", { loggedIn, nickname });
       } catch (_) {
       }
     };
@@ -377,41 +395,76 @@ ${record.code}
   }
   function installLoginBridge() {
     let unsubscribe = null;
-    let pending = null;
+    let pending = null, current = null;
+    let draining = false, accepting = false, revision = 0;
+    const forward = (state) => {
+      if (!accepting || !current || state.provider && state.provider !== current.provider) return;
+      try {
+        ipcRenderer.send("jnd-login-state", { ...state, requestId: current.requestId, requestProvider: current.provider });
+      } catch (_) {
+      }
+    };
+    const drain = async () => {
+      const bridge = window.__JND_UNIFIED_LOGIN;
+      if (draining || !bridge || !pending) return;
+      draining = true;
+      try {
+        while (pending) {
+          const request = pending, ownRevision = revision;
+          pending = null;
+          accepting = false;
+          bridge.cancel();
+          while (bridge.get().busy && ownRevision === revision) await new Promise((resolve) => setTimeout(resolve, 100));
+          if (ownRevision !== revision) continue;
+          current = request;
+          accepting = true;
+          try {
+            await bridge.start(request.provider);
+          } catch (error) {
+            if (ownRevision === revision) forward({ provider: request.provider, stage: "", qr: "", text: "", error: { code: "LOGIN_START_FAILED" } });
+            report("warn", `统一登录器发起失败：${error?.message || error}`);
+          }
+        }
+      } finally {
+        draining = false;
+      }
+    };
     const attach = () => {
       const bridge = window.__JND_UNIFIED_LOGIN;
       if (!bridge || unsubscribe) return Boolean(bridge);
-      unsubscribe = bridge.subscribe((state) => {
-        try {
-          ipcRenderer.send("jnd-login-state", state);
-        } catch (_) {
-        }
-      });
+      unsubscribe = bridge.subscribe(forward);
+      ipcRenderer.send("jnd-login-bridge-ready");
       let last = "";
       setInterval(() => {
         try {
+          if (!accepting || !current) return;
           const s = bridge.get();
-          const key = `${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ""}`;
+          const key = `${current.requestId}|${s.provider}|${s.stage}|${s.qr ? 1 : 0}|${s.error ? s.error.code : ""}`;
           if (key !== last) {
             last = key;
-            ipcRenderer.send("jnd-login-state", s);
+            forward(s);
           }
         } catch (_) {
         }
       }, 400);
-      if (pending) {
-        const provider = pending;
-        pending = null;
-        void bridge.start(provider).catch((error) => report("warn", `统一登录器发起失败：${error?.message || error}`));
-      }
       return true;
     };
-    ipcRenderer.on("jnd-login-start", (_event, provider) => {
-      if (attach()) void window.__JND_UNIFIED_LOGIN.start(String(provider)).catch((error) => report("warn", `统一登录器发起失败：${error?.message || error}`));
-      else pending = String(provider);
+    ipcRenderer.on("jnd-login-start", (_event, request) => {
+      if (!request || typeof request.provider !== "string" || !Number.isSafeInteger(request.requestId)) return;
+      revision += 1;
+      accepting = false;
+      pending = { provider: request.provider, requestId: request.requestId };
+      try {
+        window.__JND_UNIFIED_LOGIN?.cancel();
+      } catch (_) {
+      }
+      if (attach()) void drain();
     });
     ipcRenderer.on("jnd-login-cancel", () => {
+      revision += 1;
       pending = null;
+      accepting = false;
+      current = null;
       try {
         window.__JND_UNIFIED_LOGIN?.cancel();
       } catch (_) {
@@ -420,7 +473,13 @@ ${record.code}
     let tries = 0;
     const timer = setInterval(() => {
       tries += 1;
-      if (attach() || tries > 80) clearInterval(timer);
+      if (attach()) {
+        clearInterval(timer);
+        void drain();
+      } else if (tries > 80) {
+        clearInterval(timer);
+        report("warn", "统一登录器 20 秒内没有挂载，扫码无法发起");
+      }
     }, 250);
   }
   function installCredentialAutofill() {

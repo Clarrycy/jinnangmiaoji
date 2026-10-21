@@ -20,9 +20,10 @@ const { createPluginStore } = plugin_store_;
 const components_ = require("./components");
 const { COMPONENTS, parseUserScriptHeader } = components_;
 const entries_ = require("./entries");
-const { ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, TEST_ORIGIN } = entries_;
+const { ENTRIES, PROVIDERS, entryById, providerById, matchesAnyEntry, TEST_ORIGIN, landingTrimCss } = entries_;
 const game_shell_ = require("./game-shell");
-const { TITLE_HEIGHT, FRAME, BAR_COLOR, frameDocument, chromeDocument, viewportBounds } = game_shell_;
+const { TITLE_HEIGHT, FRAME, BAR_COLOR, MAC_LIGHTS, MAC_INSET, frameDocument, chromeDocument, viewportBounds } = game_shell_;
+const IS_MAC = process.platform === "darwin";
 const UpdateCore = require("./update-core");
 const popup_window_ = require("./popup-window");
 const { createOverlays } = popup_window_;
@@ -32,6 +33,7 @@ const occupiedSlots = /* @__PURE__ */ new Set();
 let nextSlot = 1;
 const crashHistory = /* @__PURE__ */ new WeakMap();
 const recoveryTimers = /* @__PURE__ */ new Map();
+const pendingErrorPages = /* @__PURE__ */ new WeakMap();
 let updateHost = null;
 let componentHost = null;
 let gmHost = null;
@@ -39,7 +41,7 @@ let shellUpdateHost = null;
 let credentials = null;
 let pluginStore = null;
 const OFFICIAL_LOGIN_PATHS = ["/login/index.html", "/login/x/index"];
-const PROVIDER_CHIP = { qq: "WeGame", wx: "WeGame", bilibili: "哔哩哔哩", steam: "Steam", oppo: "OPPO", xiaomi: "小米", vivo: "VIVO", huawei: "华为", honor: "荣耀" };
+const PROVIDER_CHIP = { qq: "WeGame", wx: "WeGame", bilibili: "bilibili", steam: "Steam", oppo: "OPPO", xiaomi: "小米", vivo: "VIVO", huawei: "华为", honor: "荣耀" };
 const UI_DEFAULTS = Object.freeze({ restore: true, confirmClose: true, muteNew: false, manager: true, stats: true });
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (character) => ({
@@ -146,8 +148,6 @@ module.exports = function startMicroClient(config) {
   }
   const uiSettings = () => ({ ...UI_DEFAULTS, ...readSettings().ui || {} });
   function defaultEntryId() {
-    const saved = String(readSettings().lastEntry || "");
-    if (entryById(saved)) return saved;
     return entryById(channel.id) ? channel.id : ENTRIES[0].id;
   }
   const entryByLabel = (label) => ENTRIES.find((e) => e.label === label) || null;
@@ -164,6 +164,10 @@ module.exports = function startMicroClient(config) {
   function installSharedAssetRedirect(session) {
     if (!SHARED_CACHE) return;
     session.webRequest.onBeforeRequest({ urls: ["https://*/*"] }, (details, callback) => {
+      if (/\/img\/10th_tmp\/yjcm_n_ban\.png$/i.test(details.url)) {
+        callback({ cancel: true });
+        return;
+      }
       if (details.method !== "GET" || !ASSET_TYPES.has(String(details.resourceType))) {
         callback({});
         return;
@@ -254,10 +258,21 @@ module.exports = function startMicroClient(config) {
       callback({ responseHeaders: headers });
     });
   }
-  function showErrorPage(contents, text) {
-    const html = `<meta charset="utf-8"><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#1a1a1a;color:#fff;font:13px/1.7 'Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI',sans-serif;text-align:center"><div><h2 style="margin:0 0 6px;font-size:14px;font-weight:400">页面没能加载</h2><p style="margin:0;color:rgba(255,255,255,.78)">${escapeHtml(text)}</p><p style="margin:14px 0 0;color:rgba(255,255,255,.45);font-size:11px">详情已写入程序目录的 ${escapeHtml(channel.logName)}</p></div></body>`;
+  function showErrorPage(contents, text, error) {
     if (contents.isDestroyed()) return;
-    contents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch((error) => log("error page failed", error?.message || error));
+    if (error?.code === "ERR_ABORTED" || error?.errno === -3) {
+      log("login-trace navigation superseded webContents=", contents.id);
+      return;
+    }
+    const html = `<meta charset="utf-8"><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#1a1a1a;color:#fff;font:13px/1.7 'Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI',sans-serif;text-align:center"><div><h2 style="margin:0 0 6px;font-size:14px;font-weight:400">页面没能加载</h2><p style="margin:0;color:rgba(255,255,255,.78)">${escapeHtml(text)}</p><p style="margin:14px 0 0;color:rgba(255,255,255,.45);font-size:11px">详情已写入程序目录的 ${escapeHtml(channel.logName)}</p></div></body>`;
+    clearImmediate(pendingErrorPages.get(contents));
+    const pending = setImmediate(() => {
+      if (pendingErrorPages.get(contents) !== pending) return;
+      pendingErrorPages.delete(contents);
+      if (contents.isDestroyed()) return;
+      contents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch((error2) => log("error page failed", error2?.message || error2));
+    });
+    pendingErrorPages.set(contents, pending);
   }
   function handleRendererGone(contents, details) {
     log("render-process-gone", JSON.stringify(details || {}));
@@ -302,7 +317,7 @@ module.exports = function startMicroClient(config) {
       record.chromeKey = chromeKey;
       record.chrome.setBounds(chromeBounds);
     }
-    const bounds = viewportBounds(width, height);
+    const bounds = viewportBounds(width, height, win.isFullScreen());
     const viewKey = JSON.stringify(bounds);
     if (record.viewKey !== viewKey) {
       record.viewKey = viewKey;
@@ -381,7 +396,7 @@ module.exports = function startMicroClient(config) {
     const contents = view.webContents;
     const providerId = known ? known.provider : msg.provider ? PROVIDERS.find((p) => p.label === msg.provider)?.id || "" : "";
     if (!known) setContainer(slot, { entryId: entry.id, provider: "", nick: "", uid: "", status: "none" });
-    const tab = { id: msg.id, owner: record, view, contents, slot, entryId: entry.id, provider: providerId, pendingCredential: null, loginProvider: null, loginSeen: "", loginPrev: null, preferredAccount: String(msg.account || ""), lastAccount: "", muted: false, nick: "", uid: "" };
+    const tab = { id: msg.id, owner: record, view, contents, slot, entryId: entry.id, pendingCredential: null, loginProvider: null, loginRequest: 0, loginSeen: "", loginRetries: 0, qrModel: null, preferredAccount: String(msg.account || ""), lastAccount: "", muted: false, nick: "", uid: "" };
     record.tabs.set(msg.id, tab);
     const { win } = record;
     win.contentView.addChildView(view, 0);
@@ -397,7 +412,7 @@ module.exports = function startMicroClient(config) {
     }
     {
       const { width, height } = win.getContentBounds();
-      view.setBounds(viewportBounds(width, height));
+      view.setBounds(viewportBounds(width, height, win.isFullScreen()));
     }
     if (uiSettings().muteNew) {
       contents.setAudioMuted(true);
@@ -427,7 +442,14 @@ module.exports = function startMicroClient(config) {
       } catch (_) {
       }
       if (parsed && /^https?:$/.test(parsed.protocol) && !matchesGame(parsed)) {
-        contents.insertCSS("html,body{overflow:hidden!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}").catch((error) => log("landing css failed", error?.message || error));
+        contents.insertCSS("::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}" + landingTrimCss(parsed.hostname)).catch((error) => log("landing css failed", error?.message || error));
+      }
+    });
+    contents.on("did-start-navigation", (_event, _url, inPlace, isMainFrame) => {
+      if (isMainFrame && !inPlace) {
+        tab.loginBridgeReady = false;
+        clearImmediate(pendingErrorPages.get(contents));
+        pendingErrorPages.delete(contents);
       }
     });
     contents.on("did-frame-navigate", (_event, url, code, text, isMainFrame) => {
@@ -442,7 +464,6 @@ module.exports = function startMicroClient(config) {
       if (!parsed || !matchesGame(parsed)) return;
       if (tab.loginProvider) {
         tab.loginProvider = null;
-        tab.loginPrev = null;
         qrClose(tab.owner, tab, "game-started");
       }
       if (!contents.isDestroyed()) contents.send("jnd-landing-game-started");
@@ -462,7 +483,7 @@ module.exports = function startMicroClient(config) {
       if (!isMainFrame) onGameFrame(url);
     });
     contents.on("console-message", (_event, level, message, line, sourceId) => {
-      if (/JND-MICRO|锦囊袋|注入|统一登录器/i.test(message)) {
+      if (/JND-MICRO|锦囊袋|注入|统一登录器/i.test(message) || /jnd-plugin-/.test(String(sourceId || "")) || level >= 2 && /\.user\.js/.test(String(sourceId || ""))) {
         log("CONSOLE", tag, "level=", level, "message=", message, "line=", line, "source=", sourceId);
       }
     });
@@ -510,7 +531,7 @@ module.exports = function startMicroClient(config) {
     if (providerId && !msg.restored) startProviderLogin(tab.owner, tab, providerId);
     else contents.loadURL(entryUrl(entry)).catch((error) => {
       log("loadURL-threw", error?.message || error);
-      showErrorPage(contents, `无法加载入口：${error?.message || error}`);
+      showErrorPage(contents, `无法加载入口：${error?.message || error}`, error);
     });
     if (process.env.JND_DEVTOOLS === "1") contents.openDevTools({ mode: "detach" });
     log("tab created", tag, "entry=", entry.id);
@@ -540,6 +561,7 @@ module.exports = function startMicroClient(config) {
     if (c && !input.shift && k === "w") return "closeTab";
     if (c && k === "tab") return input.shift ? "prevTab" : "nextTab";
     if (input.alt && k === "f") return "menu";
+    if (!IS_MAC && k === "f11") return "fullscreen";
     return null;
   }
   const partitionName = (slot) => `persist:jinnangdai-${channel.id}-${slot}`;
@@ -665,9 +687,10 @@ module.exports = function startMicroClient(config) {
   function detachTab(record, msg) {
     if (msg.kind && msg.kind !== "game") {
       const [width2, height2] = record.win.getSize();
-      const target2 = createWindow({ pageKind: msg.kind, bounds: { x: Math.round(Number(msg.x) - Number(msg.grabX) - 102), y: Math.round(Number(msg.y) - TITLE_HEIGHT / 2), width: width2, height: height2 } });
+      const PAGE_LEFT = 102 + (IS_MAC ? MAC_INSET : 0);
+      const target2 = createWindow({ pageKind: msg.kind, bounds: { x: Math.round(Number(msg.x) - Number(msg.grabX) - PAGE_LEFT), y: Math.round(Number(msg.y) - TITLE_HEIGHT / 2), width: width2, height: height2 } });
       const next2 = windows.get(target2);
-      if (next2) startFollow(next2, Number(msg.grabX) + 102, TITLE_HEIGHT / 2, true);
+      if (next2) startFollow(next2, Number(msg.grabX) + PAGE_LEFT, TITLE_HEIGHT / 2, true);
       return;
     }
     const tab = record.tabs.get(Number(msg.id));
@@ -680,7 +703,7 @@ module.exports = function startMicroClient(config) {
     } catch (_) {
     }
     const [width, height] = record.win.getSize();
-    const TAB_LEFT = 102;
+    const TAB_LEFT = 102 + (IS_MAC ? MAC_INSET : 0);
     const x = Math.round(Number(msg.x) - Number(msg.grabX) - TAB_LEFT), y = Math.round(Number(msg.y) - TITLE_HEIGHT / 2);
     const target = createWindow({ adopt: tab, bounds: { x, y, width, height } });
     const next = windows.get(target);
@@ -766,13 +789,17 @@ module.exports = function startMicroClient(config) {
     const tab = record.pendingAdopt;
     record.pendingAdopt = null;
     if (!tab) return false;
+    const card = tab.qrModel;
+    if (card) chromeSend(tab.owner, "jnd-chrome-qr", { action: "close", id: tab.id });
     tab.id = id;
     tab.owner = record;
     record.tabs.set(id, tab);
     record.order.push(id);
+    if (card && tab.loginProvider) chromeSend(record, "jnd-chrome-qr", { action: "open", id, ...card });
+    else tab.qrModel = null;
     record.win.contentView.addChildView(tab.view, 0);
     const { width, height } = record.win.getContentBounds();
-    tab.view.setBounds(viewportBounds(width, height));
+    tab.view.setBounds(viewportBounds(width, height, record.win.isFullScreen()));
     try {
       tab.view.setVisible(true);
     } catch (_) {
@@ -799,39 +826,57 @@ module.exports = function startMicroClient(config) {
   function switchEntry(record, tab, entryId, opts = {}) {
     const entry = entryById(entryId);
     if (!entry || tab.contents.isDestroyed()) return;
-    const from = `${tab.entryId}${tab.provider ? "+" + tab.provider : ""}`;
+    const was = getContainer(tab.slot);
+    const from = `${tab.entryId}${was.provider ? "+" + was.provider : ""}`;
     tab.entryId = entry.id;
-    tab.provider = "";
     setContainer(tab.slot, { entryId: entry.id, provider: "", nick: "", uid: "", status: "none" });
     tab.pendingCredential = null;
     if (tab.loginProvider) {
       tab.loginProvider = null;
       qrClose(record, tab, "switch-entry");
     }
-    writeSettings({ lastEntry: entry.id, guideDone: true });
+    writeSettings({ guideDone: true });
     setTitle(record);
     log("login-trace switch entry slot=", tab.slot, "from=", from, "to=", entry.id, "logout=", Boolean(opts.logout), entry.verified ? "" : "(unverified)");
-    const go = () => tab.contents.loadURL(entryUrl(entry)).catch((error) => showErrorPage(tab.contents, `无法加载入口：${error?.message || error}`));
+    const go = () => tab.contents.loadURL(entryUrl(entry)).catch((error) => showErrorPage(tab.contents, `无法加载入口：${error?.message || error}`, error));
     if (opts.logout) logoutSlot(tab).then(go);
     else go();
   }
+  function qrUpdate(tab, model) {
+    tab.qrModel = model;
+    chromeSend(tab.owner, "jnd-chrome-qr", { action: "update", id: tab.id, ...model });
+  }
   function qrOpen(record, tab, provider) {
     tab.loginSeen = "loading";
-    chromeSend(record, "jnd-chrome-qr", { action: "open", id: tab.id, provider: provider.label, stage: "loading", qr: "", text: "" });
+    const model = { provider: provider.label, stage: "loading", qr: "", text: "" };
+    if (tab.qrModel) {
+      qrUpdate(tab, model);
+      return;
+    }
+    tab.qrModel = model;
+    chromeSend(record, "jnd-chrome-qr", { action: "open", id: tab.id, ...model });
     log("login-trace qr open slot=", tab.slot, "provider=", provider.id);
   }
   function qrClose(record, tab, reason) {
+    tab.qrModel = null;
     chromeSend(record, "jnd-chrome-qr", { action: "close", id: tab.id });
     log("login-trace qr close slot=", tab.slot, "reason=", reason);
   }
   function qrStage(tab, state) {
     const stage = String(state?.stage || "");
-    if (/captcha|identify/i.test(stage)) return "yield";
     if (state?.error) return "error";
+    if (/captcha|identify/i.test(stage)) return "yield";
+    if (stage === "entry_config") return "entering";
     if (stage === "waiting_confirmation") return "confirm";
+    if (state?.qr && /_poll$/.test(stage) && tab.loginSeen === "confirm") return "confirm";
     if (state?.qr) return "scan";
-    if (tab.loginSeen === "scan" || tab.loginSeen === "confirm" || tab.loginSeen === "exchanging") return "exchanging";
+    if (/check|validate|judge|verify_done|verify_prepare/i.test(stage)) return "verify";
+    if (tab.loginSeen === "entering") return "entering";
+    if (["scan", "confirm", "exchanging", "yield", "verify"].includes(tab.loginSeen)) return "exchanging";
     return "loading";
+  }
+  function loginStateMatches(tab, state) {
+    return Boolean(tab.loginProvider && state?.requestId === tab.loginRequest && state.requestProvider === tab.loginProvider && (!state.provider || state.provider === tab.loginProvider));
   }
   function startProviderLogin(record, tab, providerId, opts = {}) {
     const provider = providerById(providerId);
@@ -840,12 +885,19 @@ module.exports = function startMicroClient(config) {
       log("login-trace provider re-pick ignored slot=", tab.slot, provider.id);
       return;
     }
-    const k = getContainer(tab.slot);
-    if (!tab.loginPrev) tab.loginPrev = { entryId: k.entryId, provider: k.provider };
+    const requestId = ++tab.loginRequest;
     tab.loginProvider = provider.id;
     tab.loginSeen = "";
+    tab.loginRetries = 0;
     setContainer(tab.slot, { entryId: "guanfu", provider: provider.id, nick: "", uid: "", status: "none" });
-    log("login-trace provider pick slot=", tab.slot, "provider=", provider.id, "logout=", Boolean(opts.logout));
+    log("login-trace provider pick slot=", tab.slot, "provider=", provider.id, "logout=", Boolean(opts.logout), opts.reload ? "reload" : "");
+    qrOpen(record, tab, provider);
+    setTimeout(() => {
+      if (tab.contents.isDestroyed() || tab.loginRequest !== requestId || tab.loginProvider !== provider.id || tab.loginStartedFor === requestId) return;
+      tab.loginSeen = "error";
+      log("login-trace bridge timeout slot=", tab.slot, "provider=", provider.id);
+      qrUpdate(tab, { provider: provider.label, stage: "error", qr: "", text: "", code: "LOGIN_BRIDGE_UNAVAILABLE" });
+    }, 3e4);
     const contents = tab.contents;
     const onLoginPage = () => {
       try {
@@ -856,38 +908,58 @@ module.exports = function startMicroClient(config) {
       }
     };
     const begin = () => {
-      if (contents.isDestroyed() || tab.loginProvider !== provider.id) return;
-      qrOpen(record, tab, provider);
-      contents.send("jnd-login-start", provider.id);
+      if (tab.loginStartedFor === requestId || !tab.loginBridgeReady || contents.isDestroyed() || tab.loginProvider !== provider.id || tab.loginRequest !== requestId) return;
+      tab.loginStartedFor = requestId;
+      contents.send("jnd-login-start", { provider: provider.id, requestId });
     };
+    tab.loginBegin = begin;
     const official = entryById("guanfu");
     if (tab.entryId !== official.id) {
       tab.entryId = official.id;
       setTitle(record);
     }
+    const navigate = () => {
+      if (contents.isDestroyed() || tab.loginRequest !== requestId) return;
+      if (!tab.loginNavigation) {
+        const pending = contents.loadURL(entryUrl(official));
+        tab.loginNavigation = pending;
+        void pending.finally(() => {
+          if (tab.loginNavigation === pending) tab.loginNavigation = null;
+        }).catch(() => {
+        });
+      }
+      tab.loginNavigation.then(begin, (error) => {
+        if (!contents.isDestroyed() && tab.loginRequest === requestId) showErrorPage(contents, `无法加载入口：${error?.message || error}`, error);
+      });
+    };
     if (opts.logout) {
-      logoutSlot(tab).then(() => {
-        contents.once("did-finish-load", () => setTimeout(begin, 300));
-        contents.loadURL(entryUrl(official)).catch((error) => showErrorPage(contents, `无法加载入口：${error?.message || error}`));
+      void (tab.loginNavigation || Promise.resolve()).catch(() => {
+      }).then(async () => {
+        if (contents.isDestroyed() || tab.loginRequest !== requestId) return;
+        await logoutSlot(tab);
+        navigate();
       });
       return;
     }
-    if (onLoginPage()) {
+    if (!opts.reload && onLoginPage() && tab.loginBridgeReady) {
       begin();
       return;
     }
-    contents.once("did-finish-load", () => setTimeout(begin, 300));
-    contents.loadURL(entryUrl(official)).catch((error) => showErrorPage(contents, `无法加载入口：${error?.message || error}`));
+    if (tab.loginNavigation) {
+      navigate();
+      return;
+    }
+    if (!opts.reload && onLoginPage()) return;
+    navigate();
   }
   function cancelProviderLogin(record, tab, reason) {
     if (!tab.loginProvider) return;
+    const picked = tab.loginProvider;
     tab.loginProvider = null;
     qrClose(record, tab, reason);
     if (!tab.contents.isDestroyed()) tab.contents.send("jnd-login-cancel");
-    const prev = tab.loginPrev;
-    tab.loginPrev = null;
-    if (prev) setContainer(tab.slot, { entryId: prev.entryId, provider: prev.provider, status: "none", nick: "", uid: "" });
-    log("login-trace cancel slot=", tab.slot, "reason=", reason, "restore=", JSON.stringify(prev));
+    setContainer(tab.slot, { entryId: "guanfu", provider: "", status: "none", nick: "", uid: "" });
+    log("login-trace cancel slot=", tab.slot, "reason=", reason, "was=", picked, "now= guanfu");
   }
   function settleCredential(record, tab) {
     const pending = tab.pendingCredential;
@@ -982,8 +1054,8 @@ module.exports = function startMicroClient(config) {
       minHeight: 600 + TITLE_HEIGHT,
       title: "锦囊妙计 · 一将成名",
       icon: iconPath,
-      frame: false,
-      // 标题栏连同右上三键都由 chrome 视图自绘
+      /* Windows：标题栏连同右上三键都由 chrome 视图自绘。macOS（作者 10-21）：保留系统红绿灯，标题栏其余部分仍自绘 */
+      ...IS_MAC ? { titleBarStyle: "hidden", trafficLightPosition: { ...MAC_LIGHTS } } : { frame: false },
       autoHideMenuBar: true,
       show: true,
       backgroundColor: BAR_COLOR,
@@ -1011,7 +1083,7 @@ module.exports = function startMicroClient(config) {
     chrome.webContents.on("before-input-event", (event, input) => {
       if (handleMacEditShortcut(chrome.webContents, input, win)) event.preventDefault();
     });
-    chrome.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(chromeDocument("锦囊妙计 · 一将成名", iconPng))}`).catch((error) => {
+    chrome.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(chromeDocument("锦囊妙计 · 一将成名", iconPng, process.platform))}`).catch((error) => {
       log("chrome load failed", error?.message || error);
     });
     win.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -1029,7 +1101,7 @@ module.exports = function startMicroClient(config) {
     };
     win.on("resize", relayout);
     relayout();
-    const windowState = () => chromeSend(record, "jnd-chrome-window-state", { maximized: win.isMaximized(), focused: win.isFocused() });
+    const windowState = () => chromeSend(record, "jnd-chrome-window-state", { maximized: win.isMaximized(), focused: win.isFocused(), fullscreen: win.isFullScreen() });
     win.on("focus", windowState);
     win.on("blur", windowState);
     const memTimer = setInterval(() => {
@@ -1041,6 +1113,14 @@ module.exports = function startMicroClient(config) {
       relayout();
     });
     win.on("unmaximize", () => {
+      windowState();
+      relayout();
+    });
+    win.on("enter-full-screen", () => {
+      windowState();
+      relayout();
+    });
+    win.on("leave-full-screen", () => {
       windowState();
       relayout();
     });
@@ -1106,7 +1186,6 @@ module.exports = function startMicroClient(config) {
         tab.pendingCredential = null;
         if (tab.loginProvider) {
           tab.loginProvider = null;
-          tab.loginPrev = null;
           qrClose(record, tab, "logout-all");
         }
         const entry = entryById(tab.entryId) || ENTRIES[0];
@@ -1256,6 +1335,7 @@ module.exports = function startMicroClient(config) {
         height,
         maximized: record ? record.win.isMaximized() : false,
         focused: record ? record.win.isFocused() : true,
+        fullscreen: record ? record.win.isFullScreen() : false,
         feedback: Boolean(channel.feedbackUrl),
         closed: closedRows()
       };
@@ -1345,9 +1425,11 @@ module.exports = function startMicroClient(config) {
       }
       if (cmd === "minimize") win.minimize();
       else if (cmd === "maximize") {
-        if (win.isMaximized()) win.unmaximize();
+        if (win.isFullScreen()) win.setFullScreen(false);
+        else if (win.isMaximized()) win.unmaximize();
         else win.maximize();
-      } else if (cmd === "close") {
+      } else if (cmd === "fullscreen") win.setFullScreen(!win.isFullScreen());
+      else if (cmd === "close") {
         record.closing = true;
         log("win.close: chrome asked (tabs=", record.tabs.size, ") reason=", String(reason || ""));
         try {
@@ -1469,17 +1551,26 @@ module.exports = function startMicroClient(config) {
       tail = tail.replace(/(account|password|pwd|token)[^\s,}]*/gi, "$1=***");
       const body = Buffer.from(JSON.stringify({ note: String(note || "").slice(0, 2e3), shell: displayVersion(channel.shellVersion), log: tail }), "utf8");
       const response = await new Promise((resolve, reject) => {
-        const request = https.request(channel.feedbackUrl, { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": body.length }, timeout: 2e4 }, (res) => {
+        const request = net.request({ url: channel.feedbackUrl, method: "POST", useSessionCookies: false });
+        request.setHeader("Content-Type", "application/json");
+        const timer = setTimeout(() => {
+          request.abort();
+          reject(new Error("连接超时"));
+        }, 2e4);
+        request.on("response", (res) => {
           const chunks = [];
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
+            clearTimeout(timer);
             const buf = Buffer.concat(chunks);
             if (res.statusCode === 200) resolve(buf);
             else reject(new Error(`HTTP ${res.statusCode}`));
           });
         });
-        request.on("timeout", () => request.destroy(new Error("连接超时")));
-        request.on("error", reject);
+        request.on("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
         request.end(body);
       });
       const parsed = JSON.parse(response.toString("utf8"));
@@ -1490,40 +1581,70 @@ module.exports = function startMicroClient(config) {
       const found = tabOf(event.sender);
       if (!found) return;
       const slot = found.tab.slot;
+      if (state?.loggedIn && found.tab.loginProvider) return;
       if (state?.loggedIn) {
         const patch = { status: "landing", entryId: found.tab.entryId };
         if (state.nickname) patch.nick = String(state.nickname);
-        if (state.provider) patch.provider = String(state.provider);
         setContainer(slot, patch);
         log("login-trace landing slot=", slot, "loggedIn=", true, "nick=", state.nickname ? "yes" : "no", "provider=", state.provider || "");
-        if (found.tab.loginProvider) {
-          found.tab.loginProvider = null;
-          found.tab.loginPrev = null;
-          qrClose(found.record, found.tab, "landing");
-        }
       } else {
         setContainer(slot, { status: "none", nick: "", uid: "" });
         log("login-trace landing slot=", slot, "loggedIn=", false);
       }
     });
+    ipcMain.on("jnd-login-bridge-ready", (event) => {
+      const found = tabOf(event.sender);
+      if (!found) return;
+      const tab = found.tab;
+      tab.loginBridgeReady = true;
+      if (tab.loginProvider && tab.loginStartedFor === tab.loginRequest) {
+        const requestId = ++tab.loginRequest;
+        tab.loginStartedFor = requestId;
+        tab.loginSeen = "loading";
+        tab.loginRetries = 0;
+        qrUpdate(tab, { provider: providerById(tab.loginProvider)?.label || "", stage: "loading", qr: "", text: "" });
+        log("login-trace restart after page reload slot=", tab.slot, "provider=", tab.loginProvider);
+        tab.contents.send("jnd-login-start", { provider: tab.loginProvider, requestId });
+        return;
+      }
+      tab.loginBegin?.();
+    });
     ipcMain.on("jnd-login-state", (event, state) => {
       const found = tabOf(event.sender);
+      if (!found || !loginStateMatches(found.tab, state)) return;
       if (state?.error) log("login-error slot=", found?.tab.slot, "provider=", state.provider, "stage=", state.stage, JSON.stringify(state.error));
-      if (!found || !found.tab.loginProvider) return;
       const { record, tab } = found;
       if (String(state?.stage || "") === "ready") {
+        const picked = tab.loginProvider;
         tab.loginProvider = null;
-        tab.loginPrev = null;
         qrClose(record, tab, "ready");
-        setContainer(tab.slot, { provider: String(state.provider || tab.provider || ""), status: "landing" });
+        setContainer(tab.slot, { provider: String(state.provider || picked || ""), status: "landing" });
         log("login-trace ready slot=", tab.slot, "provider=", state.provider);
         return;
       }
+      const code = String(state?.error?.code || "");
+      const retryable = state?.error && (tab.loginSeen === "" || tab.loginSeen === "loading" || tab.loginSeen === "retrying") && /TIMEOUT|NETWORK|^ERR_/i.test(code);
+      if (retryable && tab.loginRetries < 3) {
+        tab.loginRetries += 1;
+        tab.loginSeen = "retrying";
+        const n = tab.loginRetries;
+        const id = tab.loginProvider;
+        const requestId = ++tab.loginRequest;
+        log("login-trace retry-auto slot=", tab.slot, "n=", n, "code=", code);
+        qrUpdate(tab, { provider: providerById(id)?.label || "", stage: "retrying", qr: "", text: "", retry: n });
+        setTimeout(() => {
+          if (tab.loginRequest !== requestId || tab.loginProvider !== id || tab.contents.isDestroyed()) return;
+          tab.loginStartedFor = requestId;
+          tab.contents.send("jnd-login-start", { provider: id, requestId });
+        }, 1500);
+        return;
+      }
+      if (tab.loginSeen === "retrying" && !state?.error && !state?.qr && !/ready/.test(String(state?.stage || ""))) return;
       const stage = qrStage(tab, state);
       if (stage !== tab.loginSeen || stage === "scan") {
         if (stage !== tab.loginSeen) log("login-trace stage slot=", tab.slot, "script=", state?.stage, "card=", stage, "qr=", state?.qr ? "yes" : "no", state?.error ? JSON.stringify(state.error) : "");
         tab.loginSeen = stage;
-        chromeSend(record, "jnd-chrome-qr", { action: "update", id: tab.id, provider: providerById(tab.loginProvider)?.label || "", stage, qr: String(state?.qr || ""), text: String(state?.text || "") });
+        qrUpdate(tab, { provider: providerById(tab.loginProvider)?.label || "", stage, qr: String(state?.qr || ""), text: String(state?.text || ""), code: String(state?.error?.code || "") });
       }
     });
     ipcMain.on("jnd-chrome-qr-cancel", (event, m) => {
@@ -1534,13 +1655,21 @@ module.exports = function startMicroClient(config) {
     ipcMain.on("jnd-chrome-qr-retry", (event, m) => {
       const record = [...windows.values()].find((r) => r.chrome.webContents === event.sender);
       const tab = record?.tabs.get(Number(m?.id));
-      if (!record || !tab || !tab.loginProvider) return;
+      if (!record || !tab || !tab.loginProvider || tab.contents.isDestroyed()) return;
       const id = tab.loginProvider;
-      tab.loginProvider = null;
+      if (tab.loginStartedFor !== tab.loginRequest) {
+        log("login-trace retry reload slot=", tab.slot, id);
+        tab.loginProvider = null;
+        startProviderLogin(record, tab, id, { reload: true });
+        return;
+      }
+      const requestId = ++tab.loginRequest;
+      tab.loginStartedFor = requestId;
       log("login-trace retry slot=", tab.slot, id);
-      if (!tab.contents.isDestroyed()) tab.contents.send("jnd-login-cancel");
-      qrClose(record, tab, "retry");
-      setTimeout(() => startProviderLogin(record, tab, id), 200);
+      tab.loginSeen = "loading";
+      tab.loginRetries = 0;
+      qrUpdate(tab, { provider: providerById(id)?.label || "", stage: "loading", qr: "", text: "" });
+      tab.contents.send("jnd-login-start", { provider: id, requestId });
     });
     ipcMain.on("jnd-open-page", (event, kind) => {
       const found = tabOf(event.sender);
@@ -1601,6 +1730,7 @@ module.exports = function startMicroClient(config) {
   });
   app.whenReady().then(async () => {
     const payloadDirectory = process.env.JND_MICRO_PAYLOAD_DIR || path.join(__dirname, "..", channel.id, "payload");
+    node_update_host_.useNet(net);
     updateHost = await createNodeUpdateHost({
       cacheDirectory: path.join(app.getPath("userData"), "runtime-cache"),
       seedPath: path.join(payloadDirectory, "jinnangdai.runtime.js"),
@@ -1630,6 +1760,7 @@ module.exports = function startMicroClient(config) {
     gmHost = createGmRequestHost({ log, net });
     shellUpdateHost = createShellUpdateHost({
       log,
+      net,
       shellVersion: channel.shellVersion,
       stagingDirectory: path.join(app.getPath("userData"), "shell-update"),
       // 便携目录里本壳就是 resources/app.asar；源码直跑时 getAppPath 是目录，宿主会跳过换文件。
